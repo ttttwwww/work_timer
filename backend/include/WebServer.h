@@ -16,7 +16,7 @@ private:
     Database& db;
 public:
     explicit WebServer(Database& database);
-    void run(int port);
+    void run(int port, const std::string& bind_address = "127.0.0.1");
 
 };
 

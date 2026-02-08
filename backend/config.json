@@ -1,0 +1,5 @@
+{
+  "port": 8080,
+  "bind_address": "127.0.0.1",
+  "database_path": "../data/worktimer.db"
+}

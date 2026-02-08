@@ -3,7 +3,7 @@
 defineProps({
   isWorking: Boolean,
   workType: String,
-  todayWorkTime: Number
+  currentSessionTime: Number  // 当前会话的工作时长（秒）
 })
 
 // 2. 定义 emits: 声明我会发出哪些信号
@@ -26,7 +26,7 @@ const formatDuration = (seconds) => {
         {{ workType === 'formal' ? '💼 正式工作' : '🐟 摸鱼时间' }} 进行中...
       </h2>
       <div class="time-counter" v-if="isWorking">
-        {{ formatDuration(todayWorkTime) }}
+        {{ formatDuration(currentSessionTime) }}
       </div>
     </div>
 

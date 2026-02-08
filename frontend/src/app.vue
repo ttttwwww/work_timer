@@ -1,7 +1,7 @@
 <script setup>
 import { ref, onMounted, computed, onUnmounted } from 'vue'
 import { ElMessage } from 'element-plus'
-// 确保路径正确，如果报错请检查文件名大小写
+// --- 自定义模块 ---
 import WorkControls from './components/WorkControls.vue'
 import HistoryCalendar from './components/HistoryCalendar.vue'
 
@@ -9,7 +9,7 @@ import HistoryCalendar from './components/HistoryCalendar.vue'
 const isWorking = ref(false)
 const currentWorkType = ref('')
 const startTime = ref(null)
-const todayWorkTime = ref(0)
+const currentSessionTime = ref(0)  // 当前会话的工作时长（秒）
 const timerInterval = ref(null)
 
 // 1. 原始流水账
@@ -26,7 +26,7 @@ const dailyStats = computed(() => {
 
     // 2. 生成标准的 "2026-02-02" 格式 Key
     // ⚠️ 必须用 getFullYear/Month (本地时间)，不能用 toISOString (UTC时间)
-    // 否则晚上玩的时候，记录会被记到前一天去
+    // 否则跨越0点的记录会被记到前一天
     const year = d.getFullYear()
     const month = (d.getMonth() + 1).toString().padStart(2, '0') // 补0
     const day = d.getDate().toString().padStart(2, '0')          // 补0
@@ -68,7 +68,7 @@ const dailyStats = computed(() => {
 // --- 核心业务逻辑 ---
 
 // 处理"开始"信号
-const handleStart = async (type) => {
+const handleStart =  async (type) => {
   // 先检查后端状态，避免重复开始
   const checkRes = await fetch('/api/history')
   const checkData = await checkRes.json()
@@ -78,7 +78,7 @@ const handleStart = async (type) => {
     // 后端已经有正在进行的会话了（可能是其他设备开始的，或者是本设备之前没关闭的）
     ElMessage.warning('已有工作在进行中，请先结束')
     // 同步本地状态
-    await fetchHistory()
+    await syncState()
     return
   }
 
@@ -94,9 +94,9 @@ const handleStart = async (type) => {
 
   // 启动计时器 (用于界面显示 HH:MM:SS)
   timerInterval.value = setInterval(() => {
-    todayWorkTime.value = Math.floor((Date.now() / 1000) - startTime.value)
+    currentSessionTime.value = Math.floor((Date.now() / 1000) - startTime.value)
   }, 1000)
-  await fetchHistory()
+  await syncState()
   ElMessage.success(`开始 ${type === 'formal' ? '正式工作' : '摸鱼'}！`)
 }
 
@@ -111,15 +111,61 @@ const handleStop = async () => {
   isWorking.value = false
   currentWorkType.value = ''
   startTime.value = null
-  todayWorkTime.value = 0
+  currentSessionTime.value = 0
 
   // 重新从后端获取数据，保证数据一致性
-  await fetchHistory()
+  await syncState()
   ElMessage.warning('记录已保存')
 }
 
-// --- 数据处理逻辑 ---
-const fetchHistory = async () =>{
+// 处理删除记录
+const handleDelete = async (id) => {
+  try {
+    // 保护：如果尝试删除正在进行的会话，给出警告
+    const deletingLog = rawWorkLogs.value.find(log => log.id === id)
+    if (deletingLog && deletingLog.endTime === null) {
+      ElMessage.warning('不能删除正在进行的工作记录，请先停止计时')
+      return
+    }
+
+    await fetch('/api/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id })
+    })
+    await syncState()
+    ElMessage.success('删除成功')
+  } catch (err) {
+    console.error('删除失败', err)
+    ElMessage.error('删除失败')
+  }
+}
+
+// 处理更新笔记
+const handleUpdateNote = async (id, note) => {
+  try {
+    const response = await fetch('/api/note', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, note })
+    })
+
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`)
+    }
+
+    await syncState()
+    ElMessage.success('笔记已保存')
+  } catch (err) {
+    console.error('保存笔记失败', err)
+    ElMessage.error('保存笔记失败')
+  }
+}
+
+// --- 状态同步逻辑 ---
+// 从后端获取数据并同步前端状态（包括计时器）
+// 用于：页面加载、多端同步、数据变更后刷新
+const syncState = async () =>{
   try{
     const res = await fetch('/api/history')
     const data = await res.json()
@@ -128,7 +174,8 @@ const fetchHistory = async () =>{
       type: item.type,
       startTime: new Date(item.start_time * 1000),
       // 如果 end_time 是 0，说明还没结束
-      endTime: item.end_time === 0 ? null : new Date(item.end_time * 1000)
+      endTime: item.end_time === 0 ? null : new Date(item.end_time * 1000),
+      note: item.note || ''
     }))
     // 检查是否有正在进行的会话（多端同步）
     const activeSession = rawWorkLogs.value.find(log=>log.endTime === null)
@@ -138,12 +185,12 @@ const fetchHistory = async () =>{
       startTime.value = activeSession.startTime.getTime() / 1000 // 转换为秒级时间戳
 
       // 计算已经工作的时间
-      todayWorkTime.value = Math.floor((Date.now() / 1000) - startTime.value)
+      currentSessionTime.value = Math.floor((Date.now() / 1000) - startTime.value)
 
       // 只在没有计时器时才启动（避免重复创建）
       if(!timerInterval.value){
         timerInterval.value = setInterval(() => {
-          todayWorkTime.value = Math.floor((Date.now() / 1000) - startTime.value)
+          currentSessionTime.value = Math.floor((Date.now() / 1000) - startTime.value)
         }, 1000)
       }
     } else {
@@ -155,7 +202,7 @@ const fetchHistory = async () =>{
       isWorking.value = false
       currentWorkType.value = ''
       startTime.value = null
-      todayWorkTime.value = 0
+      currentSessionTime.value = 0
     }
   }catch (err){
     console.error("连接后端失败",err)
@@ -168,7 +215,7 @@ const fetchHistory = async () =>{
 // --- 加载时处理 ---
 onMounted(() => {
   // 页面加载时检查一次后端状态（实现多端同步）
-  fetchHistory()
+  syncState()
 })
 
 // 组件卸载时清理定时器
@@ -184,12 +231,16 @@ onUnmounted(() => {
     <WorkControls
         :is-working="isWorking"
         :work-type="currentWorkType"
-        :today-work-time="todayWorkTime"
+        :current-session-time="currentSessionTime"
         @start="handleStart"
         @stop="handleStop"
     />
 
-    <HistoryCalendar :daily-stats="dailyStats" />
+    <HistoryCalendar
+        :daily-stats="dailyStats"
+        @delete="handleDelete"
+        @update-note="handleUpdateNote"
+    />
   </div>
 </template>
 
