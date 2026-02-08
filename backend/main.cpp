@@ -1,15 +1,19 @@
 #include "db.hpp"
 #include "WebServer.h"
+#include "config.h"
 
 int main() {
-    // 1. 初始化数据库模块
-    Database db("worktimer.db");
+    // 加载配置文件
+    config config("config.json");
 
-    // 2. 初始化 Web 服务器模块 (把 db 传给它)
+    // 初始化数据库
+    Database db(config.getDatabasePath());
+
+    // 初始化 Web 服务器
     WebServer server(db);
 
-    // 3. 启动！
-    server.run(8080);
+    // 启动
+    server.run(config.getPort());
 
     return 0;
 }

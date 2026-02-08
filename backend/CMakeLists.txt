@@ -3,6 +3,17 @@ project(WorkTimer)
 
 set(CMAKE_CXX_STANDARD 17)
 
+# 🔧 根据构建类型自动设置调试模式
+# Debug 模式：开启调试输出
+# Release 模式：关闭调试输出
+if(CMAKE_BUILD_TYPE STREQUAL "Release")
+    message(STATUS "Release 模式：关闭调试输出")
+    add_definitions(-DDB_DEBUG_MODE=0 -DWEB_DEBUG_MODE=0)
+else()
+    message(STATUS "Debug 模式：开启调试输出")
+    add_definitions(-DDB_DEBUG_MODE=1 -DWEB_DEBUG_MODE=1)
+endif()
+
 # 1. 查找并包含 Crow (Web框架)
 # 假设你已经把 crow_all.h 下载到了 backend/include 或者配置了 find_package
 include_directories(include)
@@ -28,3 +39,11 @@ endif ()
 if(WIN32)
     target_link_libraries(WorkTimer ws2_32)
 endif()
+
+# 5. 复制配置文件到构建目录
+add_custom_command(TARGET WorkTimer POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    ${CMAKE_SOURCE_DIR}/config.json
+    $<TARGET_FILE_DIR:WorkTimer>/config.json
+)
+
