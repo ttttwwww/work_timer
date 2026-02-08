@@ -5,20 +5,48 @@ const props = defineProps({
   dailyStats: Object // 接收父组件处理好的数据
 })
 
+const emit = defineEmits(['delete', 'update-note'])
+
 const drawerVisible = ref(false)
 const selectedDate = ref('')
-const currentLogs = ref([])
+
+// 使用 computed 让 currentLogs 自动响应 dailyStats 的变化
+const currentLogs = computed(() => {
+  if (selectedDate.value && props.dailyStats[selectedDate.value]) {
+    return props.dailyStats[selectedDate.value].logs
+  }
+  return []
+})
+
+// 笔记编辑对话框
+const dialogVisible = ref(false)
+const editingLog = ref(null)
+const tempNote = ref('')
 
 // 打开抽屉
 const handleDateClick = (data) => {
-  const dayStr = data.day
-  selectedDate.value = dayStr
-  if (props.dailyStats[dayStr]) {
-    currentLogs.value = props.dailyStats[dayStr].logs
-  } else {
-    currentLogs.value = []
-  }
+  selectedDate.value = data.day
   drawerVisible.value = true
+}
+
+// 处理删除点击
+const handleDeleteClick = (id) => {
+  emit('delete', id)
+}
+
+// 打开笔记编辑对话框
+const openNoteDialog = (log) => {
+  editingLog.value = log
+  tempNote.value = log.note || ''
+  dialogVisible.value = true
+}
+
+// 保存笔记
+const saveNote = () => {
+  if (editingLog.value) {
+    emit('update-note', editingLog.value.id, tempNote.value)
+    dialogVisible.value = false
+  }
 }
 
 // --- 可视化核心算法 ---
@@ -102,13 +130,56 @@ const formatTimeRange = (log) => {
             :type="log.type === 'formal' ? 'primary' : 'success'"
             :timestamp="formatTimeRange(log)"
         >
-          {{ log.type === 'formal' ? '正式工作' : '摸鱼学习' }}
-          ({{ (log.duration / 60).toFixed(0) }} 分钟)
+          <div class="log-item">
+            <div class="log-header">
+              <span class="log-title">
+                {{ log.type === 'formal' ? '💼 正式工作' : '🐟 摸鱼学习' }}
+                ({{ (log.duration / 60).toFixed(0) }} 分钟)
+              </span>
+              <el-button
+                type="danger"
+                size="small"
+                @click="handleDeleteClick(log.id)"
+              >
+                删除
+              </el-button>
+            </div>
+
+            <div class="log-note-preview" @click="openNoteDialog(log)">
+              <div v-if="log.note" class="note-content">
+                {{ log.note }}
+              </div>
+              <div v-else class="note-placeholder">
+                点击添加笔记...
+              </div>
+            </div>
+          </div>
         </el-timeline-item>
       </el-timeline>
     </div>
 
   </el-drawer>
+
+  <!-- 笔记编辑对话框 -->
+  <el-dialog
+    v-model="dialogVisible"
+    title="编辑笔记"
+    width="500px"
+  >
+    <el-input
+      v-model="tempNote"
+      type="textarea"
+      :rows="10"
+      placeholder="请输入笔记内容..."
+      maxlength="500"
+      show-word-limit
+    />
+
+    <template #footer>
+      <el-button @click="dialogVisible = false">取消</el-button>
+      <el-button type="primary" @click="saveNote">确定</el-button>
+    </template>
+  </el-dialog>
 </template>
 
 <style scoped>
@@ -150,4 +221,54 @@ const formatTimeRange = (log) => {
 .date-cell { height: 100%; display: flex; flex-direction: column; align-items: center; cursor: pointer; }
 .date-cell.has-work { background-color: #f0f9eb; }
 .work-tag { background-color: #67c23a; color: white; border-radius: 4px; font-size: 12px; padding: 2px 6px; }
+
+/* 详细记录样式 */
+.list-container {
+  margin-top: 30px;
+}
+
+.log-item {
+  width: 100%;
+}
+
+.log-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.log-title {
+  font-weight: bold;
+  font-size: 14px;
+}
+
+.log-note-preview {
+  margin-top: 8px;
+  padding: 10px;
+  border: 1px dashed #dcdfe6;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.3s;
+  min-height: 40px;
+}
+
+.log-note-preview:hover {
+  border-color: #409eff;
+  background-color: #f5f7fa;
+}
+
+.note-content {
+  color: #303133;
+  font-size: 13px;
+  line-height: 1.5;
+  word-break: break-word;
+  white-space: pre-wrap;  /* 保留换行和空格 */
+}
+
+.note-placeholder {
+  color: #c0c4cc;
+  font-size: 13px;
+  font-style: italic;
+}
 </style>
