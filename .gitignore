@@ -1,0 +1,243 @@
+# WorkTimer .gitignore
+
+# =============================================================================
+# C++ 构建产物
+# =============================================================================
+
+# CMake 构建目录
+backend/build/
+backend/build-*/
+backend/cmake-build-*/
+backend/out/
+
+# C++ 编译产物
+*.o
+*.obj
+*.so
+*.dylib
+*.dll
+*.exe
+*.out
+*.app
+*.a
+*.lib
+
+# CMake 缓存
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+install_manifest.txt
+CTestTestfile.cmake
+*.cmake
+!CMakeLists.txt
+
+# 构建标记文件
+.build_done
+
+# =============================================================================
+# 前端 (Vue + Vite)
+# =============================================================================
+
+# Node modules
+frontend/node_modules/
+node_modules/
+
+# 前端构建产物
+frontend/dist/
+frontend/.vite/
+frontend/.vite-ssg-temp/
+
+# Vite 缓存
+frontend/.vite/
+.vite/
+
+# 依赖锁文件（可选择保留或忽略）
+# frontend/package-lock.json
+# frontend/yarn.lock
+# frontend/pnpm-lock.yaml
+
+# 前端构建标记
+frontend/.build_done
+
+# =============================================================================
+# 项目构建与发布
+# =============================================================================
+
+# Release 构建目录
+/build-Debug/
+/build-Release/
+/release/
+/Release/
+/build/
+
+# 打包文件
+*.tar.gz
+*.zip
+*.7z
+
+# =============================================================================
+# 数据与日志
+# =============================================================================
+
+# 数据库文件
+data/
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# 日志文件
+*.log
+logs/
+log/
+
+# 临时文件
+tmp/
+temp/
+*.tmp
+
+# =============================================================================
+# IDE 和编辑器
+# =============================================================================
+
+# Visual Studio Code
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+!.vscode/*.code-snippets
+.history/
+*.vsix
+
+# JetBrains IDEs (CLion, WebStorm, etc.)
+.idea/
+*.iml
+*.iws
+*.ipr
+cmake-build-*/
+.idea_modules/
+
+# Visual Studio
+.vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.vcxproj
+*.vcxproj.filters
+*.sln
+
+# Vim
+*.swp
+*.swo
+*~
+.*.sw?
+
+# Emacs
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+*.elc
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# =============================================================================
+# 操作系统
+# =============================================================================
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Linux
+.directory
+.Trash-*
+
+# =============================================================================
+# 配置文件（根据需要调整）
+# =============================================================================
+
+# 本地配置（保留模板，忽略实际配置）
+config.local.json
+.env.local
+.env.*.local
+
+# 敏感信息
+*.key
+*.pem
+*.cert
+secrets/
+
+# =============================================================================
+# 测试与覆盖率
+# =============================================================================
+
+# 测试产物
+test_output/
+test_results/
+
+# 覆盖率报告
+coverage/
+*.gcov
+*.gcda
+*.gcno
+lcov.info
+
+# =============================================================================
+# 包管理器
+# =============================================================================
+
+# npm/yarn
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Backup files
+*.bak
+*.backup
+*~
+
+# =============================================================================
+# 其他
+# =============================================================================
+
+# 文档生成
+docs/_build/
+docs/.doctrees/
+site/
+
+# 压缩文件
+*.tar
+*.rar
+*.jar
+*.war
+*.ear
+*.nar
+
+# Core dumps
+core
+core.*
+
+# 性能分析
+*.prof
+perf.data
+perf.data.old
+callgrind.out.*

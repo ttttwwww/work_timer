@@ -3,6 +3,9 @@ project(WorkTimer)
 
 set(CMAKE_CXX_STANDARD 17)
 
+# 为 Crow 添加必要的定义
+add_definitions(-D_GLIBCXX_USE_C99_MATH_TR1)
+
 # 🔧 根据构建类型自动设置调试模式
 # Debug 模式：开启调试输出
 # Release 模式：关闭调试输出
@@ -29,12 +32,16 @@ add_executable(WorkTimer main.cpp
 )
 
 # 4. 链接库
+# 查找 pthread
+find_package(Threads REQUIRED)
+
 if(TARGET SQLite3::SQLite3)
-    target_link_libraries(WorkTimer SQLite3::SQLite3)
+    target_link_libraries(WorkTimer SQLite3::SQLite3 Threads::Threads stdc++fs)
 else ()
     target_include_directories(WorkTimer PRIVATE ${SQLite3_INCLUDE_DIRS})
-    target_link_libraries(WorkTimer PRIVATE ${SQLite3_LIBRARIES})
+    target_link_libraries(WorkTimer ${SQLite3_LIBRARIES} Threads::Threads stdc++fs)
 endif ()
+
 # Windows 下可能还需要链接 ws2_32 (Winsock)
 if(WIN32)
     target_link_libraries(WorkTimer ws2_32)
