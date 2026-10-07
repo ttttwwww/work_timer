@@ -1,159 +1,132 @@
-# WorkTimer - 牛马钟
-供牛马灵活记录自己的工作/摸鱼时间，评估自己的实际工作时长
+# WorkTimer · 牛马钟
 
+记录工作与摸鱼/学习的时间，也记录任务推进过程中遇到的问题和下一步。浏览器提供操作界面，C++ 服务负责接口和持久化，数据保存在本地 SQLite 文件中。
 
-## quick start
+## 能做什么
 
-### 前置要求
+| 功能 | 使用方式 |
+| --- | --- |
+| 工作计时 | 选择“正式工作”或“摸鱼/学习”开始计时；同一服务同时保留一个进行中的计时 |
+| 结束时间确认 | 结束前确认实际结束时间，可提前结束并查看保留、扣除的时长 |
+| 历史与笔记 | 按日历查看时长、时间分布和明细，为记录添加笔记；跨午夜的记录按天展示 |
+| 任务面板 | 创建任务，在任务下建立问题节点，再拆分为可勾选的待办 |
+| 待办内进度 | 展开具体待办，记录尝试、结果和下一步；完成后保留日志 |
+| 多端访问 | 多个浏览器连接同一服务，共享已保存数据，通过定期请求同步 |
 
-- GCC 9+ 或 Clang 10+，支持 C++17
-- CMake 3.20+
-- Node.js 16+
-- SQLite3
-- Make
+任务可以表示“复现实验”，节点可以表示“准确率偏低”，待办可以表示“检查输入归一化”，进度则记录这一步做过什么、结果如何。详细操作见[使用指南](docs/usage.md)。
 
-### 构建与运行
+当前计时记录与任务面板独立，尚未关联任务工时。服务没有账号与用户隔离，连接同一服务的设备共享数据。
+
+<details>
+<summary>查看任务面板示例（演示数据）</summary>
+
+![任务面板：各待办分别展开自己的进度日志](docs/images/task-panel-desktop.png)
+
+</details>
+
+## 快速开始
+
+以下命令用于 Linux 或 Windows 的 WSL 环境。当前 Makefile 使用 POSIX 工具，不能直接当作 PowerShell 或 cmd 脚本运行；WSL 中生成的是 Linux 可执行文件。
+
+### 准备依赖
+
+需要支持 C++17 的编译器、CMake 3.20+、GNU Make、SQLite3 和独立版 Asio 开发头文件，以及 Node.js 20+ 与 npm。Crow 头文件已包含在仓库中。
+
+Ubuntu/Debian 的系统依赖：
 
 ```bash
-# 克隆项目
+sudo apt update
+sudo apt install -y build-essential cmake libsqlite3-dev libasio-dev
+```
+
+确认版本，尤其是系统包提供的 CMake 和 Node.js 是否满足要求：
+
+```bash
+g++ --version
+cmake --version
+node --version
+npm --version
+```
+
+旧版 CentOS 等系统的默认工具链可能不足，不能只安装 `sqlite-devel`、`asio-devel` 就认为依赖齐全。请同时检查编译器、CMake 和 Node.js 版本。
+
+### 构建并运行
+
+```bash
 git clone https://github.com/ttttwwww/work_timer.git
 cd work_timer
-
-# 一键构建
+# 按锁文件安装前端依赖
+npm --prefix frontend ci
 make release
-
-# 运行
 cd build-Release
 ./WorkTimer
 ```
 
-在浏览器打开：http://localhost:8080
+打开 [http://localhost:8080](http://localhost:8080)。运行时保持终端中的服务进程开启。
 
-注意：该项目需要sqlite3和libasio-dev的依赖，否则编译可能报错，运行下列命令安装相应的库文件
-对于Ubuntu/Debian：
+`make release` 构建 Vue 静态资源和 C++ 程序，再组装到 `build-Release/`。请从该目录运行程序，因为配置文件和静态资源使用相对路径。更多构建与运行原理见[系统架构](docs/architecture.md)。
 
-```bash
-sudo apt update
-sudo apt install -y libasio-dev libsqlite3-dev
-```
+## 配置与数据
 
-对于CentOS 7 / Rocky Linux / RHEL
-```bash
-# 安装开发工具包（如果未安装）
-sudo yum groupinstall "Development Tools"
-
-# 安装 SQLite3 和 Asio 的开发包
-sudo yum install -y sqlite-devel asio-devel
-
-# 如果找不到 asio-devel，可能需要先安装 EPEL 源
-# sudo yum install -y epel-release
-```
-nodejs的安装命令如下
-安装nodejs
-```bash
-# 1. 一键安装 fnm 脚本
-curl -fsSL https://fnm.vercel.app/install | bash
-
-# 2. 激活环境 (或重启终端)
-source ~/.bashrc
-
-# 3. 安装并使用最新的 LTS (长期支持版)
-fnm install --lts
-fnm use lts-latest
-
-# 4. 验证
-node -v
-```
-
-
-## 配置
-
-数据库路径和运行端口可以自定义，make 后会在 build-Release（或 build-Debug）文件夹中生成 config.json 文件。
-
+配置源文件是 [backend/config.json](backend/config.json)，构建时复制到 `build-Release/config.json`：
 
 ```json
 {
   "port": 8080,
+  "bind_address": "127.0.0.1",
   "database_path": "../data/worktimer.db"
 }
 ```
-修改其中的port与database_path以自定义端口与数据存放路径
 
-## 项目结构
+| 配置 | 含义 |
+| --- | --- |
+| `port` | HTTP 监听端口 |
+| `bind_address` | 默认仅监听本机；多端访问时改为服务器可达的接口地址，或按需监听 `0.0.0.0` |
+| `database_path` | SQLite 文件路径；相对路径以程序启动时的工作目录为基准 |
 
-```
-worker-counter/
-├── backend/              # C++ 后端
-│   ├── include/          # 头文件
-│   ├── src/              # 源代码
-│   └── config.json       # 配置文件
-├── frontend/             # Vue 前端
-│   └── src/
-│       ├── app.vue       # 主组件
-│       └── components/   # 子组件
-├── data/                 # 数据目录（不会被 clean 删除）
-│   └── worktimer.db      # SQLite 数据库
-├── docs/                 # 文档
-│   ├── architecture.md   # 架构文档
-│   ├── data-flow.md      # 数据流图
-│   └── HOW-TO-DRAW.md    # 绘图教程
-├── release/              # 发布目录
-└── Makefile              # 构建脚本
-```
+配置解析器按行读取，保留上述多行格式，每个字段单独一行。修改后重启服务生效。重新构建会覆盖发布目录中的配置，因此需要长期保留的配置应修改源文件，或在部署时重新应用。
 
-详细架构见：[docs/architecture.md](./docs/architecture.md)
+默认数据位于项目根目录的 `data/worktimer.db`。升级源码时保留该文件及原配置路径，启动时会自动创建新表并迁移旧数据，详见[数据库与迁移](docs/database.md)。对同一数据库继续运行新版本，才能看到旧记录。
 
+多端访问时在其他设备打开服务器的实际地址与端口。浏览器中的 `localhost` 指的是该浏览器所在设备；服务当前没有登录鉴权，应部署在你打算共享数据的可信网络中。
 
+## 文档导航
 
-## 编译选项
+| 想了解什么 | 文档 |
+| --- | --- |
+| 功能、操作步骤和保存规则 | [使用指南](docs/usage.md) |
+| 运行结构、模块职责与代码位置 | [系统架构](docs/architecture.md) |
+| 从界面操作追踪到数据库的完整过程 | [数据流与实现解读](docs/data-flow.md) |
+| 表关系、字段、约束与升级迁移 | [数据库说明](docs/database.md) |
+| HTTP 请求、响应、错误与数据库映射 | [API 参考](docs/api.md) |
 
-```bash
-make              # 增量构建（默认 Debug）
-make debug        # Debug 模式（带调试输出）
-make release      # Release 模式（优化版本）
-make clean        # 清理构建（保留 data/）
-```
+学习实现时建议按“系统架构 → 数据流 → 数据库/API 参考”的顺序阅读。
 
+## 开发与验证
 
-## 计时修复与结束时间调整
+| 命令 | 作用 |
+| --- | --- |
+| `make` / `make debug` | Debug 构建，组装到 `build-Debug/` |
+| `make release` | Release 构建，组装到 `build-Release/` |
+| `make clean` | 清除后端构建缓存、前端产物和构建标记，保留数据与 npm 依赖；当前脚本不会删除根目录的 `build-*` 发布目录 |
+| `make distclean` | 在 `clean` 基础上移除前端 `node_modules/` |
 
-- 计时显示以 `/api/state` 返回的服务器时间为基准，使用 `performance.now()` 推进，不依赖设备的 `Date.now()`。每 15 秒和页面重新可见时同步一次。
-- 进行中的日历明细、时间条和总时长每秒刷新；跨午夜的记录分别统计到对应日期。
-- 点击“结束”后先确认实际结束时间，可将时间提前，并预览保留与扣除的时长。取消则继续计时。
-- 后端校验结束时间范围和会话 ID，拒绝重复开始计时、删除活跃记录，以及用旧页面结束另一条记录。
-- 笔记使用参数绑定保存，支持单引号、换行和中文；保存失败时保留编辑内容。
+前端开发可在后端运行时执行 `npm --prefix frontend run dev`，使用 Vite 输出的地址。开发代理将 `/api` 转发到 `http://localhost:8080`；更改后端端口后需要同步修改 [frontend/vite.config.js](frontend/vite.config.js)。
 
-## 任务面板
-
-1. 打开“任务面板”，新建任务，填写标题、说明和状态（待办 / 进行中 / 已完成）。左侧支持搜索和状态筛选。
-2. 在任务中“添加问题节点”，记录遇到的问题。节点状态为待解决 / 处理中 / 已解决。
-3. 选中节点后，添加、编辑和勾选待办，查看清单完成比例。
-4. 点击具体待办的“展开进度”，在待办内部追加本次尝试、结果和下一步。各待办分别保存日志，最新记录在前；新建待办会自动展开。勾选完成不会清除日志。
-5. 任务、节点、待办和进度支持删除。删除任务、节点或待办会在确认后同时删除其下属数据。
-
-所有内容保存在现有 SQLite 数据库中，刷新或重启后保留，其他设备连接同一服务也能查看。新表首次启动时自动创建，旧计时记录不变。与原项目一致，这是同一服务共享的面板，没有新增账号或用户隔离。编辑说明或状态后需点击保存；进度日志需点击“记录进度”。
-
-任务完成状态与节点状态分别维护，不会因为勾完清单就自动解决问题或完成整个任务。
-
-升级时，原先直接记录在节点下的日志会自动放入该节点新增的“历史进度（原节点记录）”待办，保留原文和时间，不猜测它们属于哪条现有待办。迁移只执行一次，旧计时和其他待办不变。继续使用原数据库路径即可。当前页面内切换节点、收起待办或保存失败都会保留未提交的草稿；刷新页面会丢弃未提交的草稿。
-
-## 回归测试
-
-前端计时逻辑测试（Node.js 18+）：
+从项目根目录执行测试：
 
 ```bash
-cd frontend
-npm ci
-npm test
-npm run build
-```
-
-后端 HTTP 集成测试（Python 3；先构建后端）：
-
-```bash
+npm --prefix frontend test
+npm --prefix frontend run build
+# 先通过 make release 生成后端程序
 python3 tests/test_api.py ./build-Release/WorkTimer
 ```
 
-测试会启动临时本地服务并使用临时 SQLite 数据库，验证旧数据库迁移、并发开始、结束时间校验、笔记特殊字符、任务 CRUD、重启持久化和级联删除，不会连接运行中的服务。
+HTTP 测试在临时目录中启动独立服务和数据库，覆盖计时校验、并发开始、数据迁移、任务 CRUD、持久化与级联删除，不使用个人数据库。前端测试覆盖时钟与按日统计逻辑。Vite 生产构建可能提示 Element Plus 全量引入的包体积较大。
 
-API 和数据结构说明见 [docs/task-panel.md](./docs/task-panel.md)。
+## 常见问题
+
+- **WSL 报 `target pattern contains no '%'`**：确认使用新版 Makefile。它会在扫描依赖时忽略 Windows 下载生成的 `:Zone.Identifier` 文件；其他含冒号或空格的源码路径仍可能影响 Make 的依赖解析。
+- **缺少 `asio.hpp` 或 SQLite 头文件**：安装开发包，而不只是 SQLite 命令行程序。
+- **页面提示找不到 `dist/index.html`**：先执行 `make release`，再进入 `build-Release/` 运行。
+- **升级后看不到旧数据**：检查运行目录和 `database_path` 是否仍指向原文件；不同路径会创建不同的数据库。
