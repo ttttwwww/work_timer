@@ -20,6 +20,7 @@ include_directories(include)
 
 # 2. 查找并链接 SQLite3
 find_package(SQLite3 REQUIRED)
+find_package(Threads REQUIRED)
 
 file(GLOB_RECURSE HEADER_FILES "include/*.h" "include/*.hpp")
 # 3. 生成可执行文件
@@ -30,14 +31,16 @@ add_executable(WorkTimer main.cpp
 
 # 4. 链接库
 if(TARGET SQLite3::SQLite3)
-    target_link_libraries(WorkTimer SQLite3::SQLite3)
+    target_link_libraries(WorkTimer PRIVATE SQLite3::SQLite3)
 else ()
     target_include_directories(WorkTimer PRIVATE ${SQLite3_INCLUDE_DIRS})
     target_link_libraries(WorkTimer PRIVATE ${SQLite3_LIBRARIES})
 endif ()
+target_link_libraries(WorkTimer PRIVATE Threads::Threads)
+
 # Windows 下可能还需要链接 ws2_32 (Winsock)
 if(WIN32)
-    target_link_libraries(WorkTimer ws2_32)
+    target_link_libraries(WorkTimer PRIVATE ws2_32)
 endif()
 
 # 5. 复制配置文件到构建目录

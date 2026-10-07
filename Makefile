@@ -52,7 +52,8 @@ all: vue_build cpp_build install
 # 1. 构建 Vue 前端（增量）
 vue_build: $(VUE_BUILD_MARK)
 
-$(VUE_BUILD_MARK): $(shell find $(VUE_DIR)/src -type f 2>/dev/null) $(VUE_DIR)/package.json
+# Windows 下载标记带冒号，会被 GNU Make 当作静态模式规则语法。
+$(VUE_BUILD_MARK): $(shell find $(VUE_DIR)/src -type f ! -name '*:Zone.Identifier' 2>/dev/null) $(VUE_DIR)/package.json
 	@echo "[1/3] 检测到前端代码变化，正在构建..."
 	@# 检测是否存在 node_modules，没有才 install，加快速度
 	@if [ ! -d "$(VUE_DIR)/node_modules" ]; then \
@@ -76,7 +77,7 @@ vue_build_force:
 # 2. 构建 C++ 后端（增量）
 cpp_build: $(CPP_BUILD_MARK)
 
-$(CPP_BUILD_MARK): $(shell find $(CPP_DIR)/src -type f 2>/dev/null) $(shell find $(CPP_DIR)/include -type f 2>/dev/null) $(CPP_DIR)/CMakeLists.txt
+$(CPP_BUILD_MARK): $(shell find $(CPP_DIR)/src -type f ! -name '*:Zone.Identifier' 2>/dev/null) $(shell find $(CPP_DIR)/include -type f ! -name '*:Zone.Identifier' 2>/dev/null) $(CPP_DIR)/CMakeLists.txt
 	@echo "[2/3] 检测到后端代码变化，正在编译 ($(BUILD_TYPE) 模式)..."
 	@mkdir -p $(CPP_BUILD_DIR)
 	@cd $(CPP_BUILD_DIR) && cmake -DCMAKE_BUILD_TYPE=$(BUILD_TYPE) .. && make -j$(NPROCS)

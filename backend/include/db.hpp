@@ -2,153 +2,264 @@
 #define DB_HPP
 
 #include <sqlite3.h>
-#include <vector>
+#include <ctime>
+#include <filesystem>
+#include <mutex>
+#include <stdexcept>
 #include <string>
-#include <iostream>
+#include <vector>
 
-// 调试开关：由 CMake 自动设置（不需要手动修改）
-// 如果 CMake 没有定义，默认开启调试
-#ifndef DB_DEBUG_MODE
-    #define DB_DEBUG_MODE 1
-#endif
-
-// 定义数据结构，对应前端需要的字段
+struct RequestError : std::runtime_error {
+    int status;
+    RequestError(int code, const std::string& message) : std::runtime_error(message), status(code) {}
+};
 struct WorkSession {
     int id{};
-    long long start_time{};
-    long long end_time{};
-    std::string type;
-    std::string note; // 可选：添加笔记字段
+    long long start_time{}, end_time{};
+    std::string type, note;
+};
+struct Task {
+    int id{};
+    std::string title, description, status;
+    long long created_at{}, updated_at{};
+};
+struct ProblemNode {
+    int id{}, task_id{};
+    std::string title, description, status;
+    long long created_at{}, updated_at{};
+};
+struct Todo {
+    int id{}, node_id{};
+    std::string title;
+    bool done{};
+};
+struct ProgressEntry {
+    int id{}, node_id{}, todo_id{};
+    std::string content;
+    long long created_at{};
+};
+struct TaskBoard {
+    std::vector<Task> tasks;
+    std::vector<ProblemNode> nodes;
+    std::vector<Todo> todos;
+    std::vector<ProgressEntry> progress;
 };
 
 class Database {
-private:
     sqlite3* db{};
+    mutable std::mutex mutex;
 
+    // Statements own their SQLite resources; all user text is bound, never SQL.
+    class Statement {
+        sqlite3* db;
+        sqlite3_stmt* stmt{};
+    public:
+        Statement(sqlite3* database, const char* sql) : db(database) {
+            if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK)
+                throw std::runtime_error(sqlite3_errmsg(db));
+        }
+        ~Statement() { sqlite3_finalize(stmt); }
+        Statement(const Statement&) = delete;
+        Statement& operator=(const Statement&) = delete;
+        void bind(int i, long long value) {
+            if (sqlite3_bind_int64(stmt, i, value) != SQLITE_OK) throw std::runtime_error(sqlite3_errmsg(db));
+        }
+        void bind(int i, const std::string& value) {
+            if (sqlite3_bind_text(stmt, i, value.data(), static_cast<int>(value.size()), SQLITE_TRANSIENT) != SQLITE_OK)
+                throw std::runtime_error(sqlite3_errmsg(db));
+        }
+        bool next() {
+            const int rc = sqlite3_step(stmt);
+            if (rc == SQLITE_ROW) return true;
+            if (rc == SQLITE_DONE) return false;
+            throw std::runtime_error(sqlite3_errmsg(db));
+        }
+        long long number(int i) const { return sqlite3_column_int64(stmt, i); }
+        std::string text(int i) const {
+            const auto* value = sqlite3_column_text(stmt, i);
+            return value ? std::string(reinterpret_cast<const char*>(value), sqlite3_column_bytes(stmt, i)) : "";
+        }
+    };
+    void execute(const char* sql) const {
+        char* error = nullptr;
+        if (sqlite3_exec(db, sql, nullptr, nullptr, &error) != SQLITE_OK) {
+            std::string message = error ? error : sqlite3_errmsg(db);
+            sqlite3_free(error);
+            throw std::runtime_error(message);
+        }
+    }
+    void requireChanged() const {
+        if (!sqlite3_changes(db)) throw RequestError(404, "记录不存在，可能已在其他设备删除");
+    }
+    void requireParent(const char* sql, int id) const {
+        Statement query(db, sql); query.bind(1, id);
+        if (!query.next()) throw RequestError(404, "所属任务、节点或待办不存在，请刷新后重试");
+    }
+    // Input: the open database with the original task tables. Output: schema v1.
+    // Move unassigned node logs into one explicit historical todo per node.
+    // The transaction and version marker make migration atomic and repeatable.
+    void migrateProgressToTodos() const {
+        execute("BEGIN IMMEDIATE;");
+        try {
+            long long version = 0;
+            {
+                Statement query(db, "PRAGMA user_version;");
+                if (query.next()) version = query.number(0);
+            }
+            if (version < 1) {
+                execute("CREATE TABLE todo_progress (id INTEGER PRIMARY KEY AUTOINCREMENT, todo_id INTEGER NOT NULL REFERENCES node_todos(id) ON DELETE CASCADE, content TEXT NOT NULL, created_at INTEGER NOT NULL);"
+                        "CREATE INDEX progress_todo ON todo_progress(todo_id);");
+                std::vector<long long> nodeIds;
+                {
+                    Statement nodes(db, "SELECT DISTINCT node_id FROM node_progress ORDER BY node_id;");
+                    while (nodes.next()) nodeIds.push_back(nodes.number(0));
+                }
+                for (const auto nodeId : nodeIds) {
+                    Statement todo(db, "INSERT INTO node_todos(node_id,title,done) VALUES(?,?,0);");
+                    todo.bind(1, nodeId);
+                    todo.bind(2, std::string("历史进度（原节点记录）"));
+                    todo.next();
+                    const auto todoId = sqlite3_last_insert_rowid(db);
+                    Statement copy(db, "INSERT INTO todo_progress(id,todo_id,content,created_at) SELECT id,?,content,created_at FROM node_progress WHERE node_id=?;");
+                    copy.bind(1, todoId); copy.bind(2, nodeId); copy.next();
+                }
+                // Retain the original table as a migration backup; the new API
+                // only reads/writes todo_progress after this point.
+                execute("PRAGMA user_version = 1;");
+            }
+            execute("COMMIT;");
+        } catch (...) {
+            sqlite3_exec(db, "ROLLBACK;", nullptr, nullptr, nullptr);
+            throw;
+        }
+    }
 public:
-    explicit Database(const std::string& db_path) {
-        // 1. 打开/创建数据库文件
-        if (int rc = sqlite3_open(db_path.c_str(), &db)) {
-            std::cerr << "无法打开数据库: " << sqlite3_errmsg(db) << std::endl;
-        } else {
-            // 2. 确保表存在
-            initTable();
+    explicit Database(const std::string& path) {
+        if (path != ":memory:") {
+            const auto parent = std::filesystem::path(path).parent_path();
+            if (!parent.empty()) std::filesystem::create_directories(parent);
         }
-    }
-
-    ~Database() {
-        sqlite3_close(db);
-    }
-
-    void initTable() const
-    {
-        const auto sql =
-            "CREATE TABLE IF NOT EXISTS sessions ("
-            "id INTEGER PRIMARY KEY AUTOINCREMENT,"
-            "start_time INTEGER NOT NULL,"
-            "end_time INTEGER,"
-            "type TEXT NOT NULL,"
-            "note TEXT DEFAULT '');";
-
-        char* errMsg = nullptr;
-        sqlite3_exec(db, sql, nullptr, nullptr, &errMsg);
-
-        // 为已存在的数据库添加 note 列（如果不存在）
-        const auto alterSql = "ALTER TABLE sessions ADD COLUMN note TEXT DEFAULT '';";
-        sqlite3_exec(db, alterSql, nullptr, nullptr, &errMsg);
-        // 忽略错误（如果列已存在会失败，这是正常的）
-    }
-
-    // --- 开始计时 (INSERT) ---
-    void startSession(const long long startTime, const std::string& type) const
-    {
-        // 为了简单演示，这里用 sprintf 拼接 SQL (实际生产建议用 bind 避免注入)
-        // 注意：end_time 初始设为 0
-        const std::string sql = "INSERT INTO sessions (start_time, end_time, type) VALUES ("
-                          + std::to_string(startTime) + ", 0, '" + type + "');";
-
-        execute(sql);
-    }
-
-    // --- 停止计时 (UPDATE) ---
-    // 逻辑：找到最近一条 end_time 为 0 的记录，把它填上当前时间
-    void stopSession(const long long endTime) const
-    {
-        const std::string sql = "UPDATE sessions SET end_time = " + std::to_string(endTime) +
-                          " WHERE id = (SELECT id FROM sessions WHERE end_time = 0 ORDER BY id DESC LIMIT 1);";
-        execute(sql);
-    }
-
-    // --- 功能: 获取所有历史 (SELECT) ---
-    [[nodiscard]] std::vector<WorkSession> getAllSessions() const
-    {
-        std::vector<WorkSession> results;
-        sqlite3_stmt* stmt;
-
-        // 🐛 修复：SQL 查询中必须包含 note 字段！
-        if (const auto sql = "SELECT id, start_time, end_time, type, note FROM sessions ORDER BY start_time DESC;"; sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
-            while (sqlite3_step(stmt) == SQLITE_ROW) {
-                WorkSession s;
-                s.id = sqlite3_column_int(stmt, 0);
-                s.start_time = sqlite3_column_int64(stmt, 1);
-                s.end_time = sqlite3_column_int64(stmt, 2);
-
-                // 取字符串稍微麻烦一点
-                const unsigned char* typeText = sqlite3_column_text(stmt, 3);
-                s.type = typeText ? reinterpret_cast<const char*>(typeText) : "unknown";
-                const unsigned char* noteText = sqlite3_column_text(stmt, 4);
-                s.note = noteText ? reinterpret_cast<const char*>(noteText) : "";
-                results.push_back(s);
+        if (sqlite3_open(path.c_str(), &db) != SQLITE_OK) {
+            const std::string message = sqlite3_errmsg(db);
+            sqlite3_close(db); db = nullptr;
+            throw std::runtime_error(message);
+        }
+        try {
+            sqlite3_busy_timeout(db, 5000);
+            execute("PRAGMA foreign_keys = ON;");
+            execute("CREATE TABLE IF NOT EXISTS sessions (id INTEGER PRIMARY KEY AUTOINCREMENT, start_time INTEGER NOT NULL, end_time INTEGER, type TEXT NOT NULL, note TEXT DEFAULT '');");
+            bool hasNote = false;
+            {
+                Statement columns(db, "PRAGMA table_info(sessions);");
+                while (columns.next()) if (columns.text(1) == "note") hasNote = true;
             }
-        }
-        sqlite3_finalize(stmt);
-        return results;
+            if (!hasNote) execute("ALTER TABLE sessions ADD COLUMN note TEXT DEFAULT '';");
+            execute(
+                "CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'todo' CHECK(status IN ('todo','doing','done')), created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);"
+                "CREATE TABLE IF NOT EXISTS problem_nodes (id INTEGER PRIMARY KEY AUTOINCREMENT, task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE, title TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','doing','resolved')), created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);"
+                "CREATE TABLE IF NOT EXISTS node_todos (id INTEGER PRIMARY KEY AUTOINCREMENT, node_id INTEGER NOT NULL REFERENCES problem_nodes(id) ON DELETE CASCADE, title TEXT NOT NULL, done INTEGER NOT NULL DEFAULT 0 CHECK(done IN (0,1)));"
+                "CREATE TABLE IF NOT EXISTS node_progress (id INTEGER PRIMARY KEY AUTOINCREMENT, node_id INTEGER NOT NULL REFERENCES problem_nodes(id) ON DELETE CASCADE, content TEXT NOT NULL, created_at INTEGER NOT NULL);"
+                "CREATE INDEX IF NOT EXISTS nodes_task ON problem_nodes(task_id);"
+                "CREATE INDEX IF NOT EXISTS todos_node ON node_todos(node_id);"
+                "CREATE INDEX IF NOT EXISTS progress_node ON node_progress(node_id);");
+            migrateProgressToTodos();
+        } catch (...) { sqlite3_close(db); db = nullptr; throw; }
     }
-    // 功能:删除指定id的记录
-    void deleteSession(const int id) const
-    {
-        const auto sql = "DELETE FROM sessions WHERE id = " + std::to_string(id)+ ";";
-        execute(sql);
-    }
-    // 功能:针对指定id添加笔记
-    void addNoteToSession(const int id, const std::string& note) const
-    {
-        // 假设 sessions 表中有一个 note 字段
-        const auto sql = "UPDATE sessions SET note = '" + note + "' WHERE id = " + std::to_string(id) + ";";
-        execute(sql);
-    }
+    ~Database() { sqlite3_close(db); }
+    Database(const Database&) = delete;
+    Database& operator=(const Database&) = delete;
 
-    // 🔍 调试功能：打印所有数据库记录到控制台
-    void debugPrintAllSessions() const
-    {
-#if DB_DEBUG_MODE
-        std::cout << "\n========== 数据库内容 ==========\n";
-        auto sessions = getAllSessions();
-        if (sessions.empty()) {
-            std::cout << "(数据库为空)\n";
-        } else {
-            for (const auto& s : sessions) {
-                std::cout << "ID: " << s.id
-                          << " | Type: " << s.type
-                          << " | Start: " << s.start_time
-                          << " | End: " << s.end_time
-                          << " | Note: [" << s.note << "]\n";
-            }
-        }
-        std::cout << "================================\n\n";
-#endif
+    int startSession(long long now, const std::string& type) const {
+        std::lock_guard<std::mutex> lock(mutex);
+        Statement insert(db, "INSERT INTO sessions(start_time,end_time,type) SELECT ?,0,? WHERE NOT EXISTS(SELECT 1 FROM sessions WHERE COALESCE(end_time,0)=0);");
+        insert.bind(1, now); insert.bind(2, type); insert.next();
+        if (!sqlite3_changes(db)) throw RequestError(409, "已有计时在进行中，请先结束");
+        return static_cast<int>(sqlite3_last_insert_rowid(db));
     }
-
-private:
-    // --- 辅助函数：执行 SQL 语句并处理错误 ---
-    void execute(const std::string& sql) const
-    {
-        char* errMsg = nullptr;
-        if (const int rc = sqlite3_exec(db, sql.c_str(), nullptr, nullptr, &errMsg); rc != SQLITE_OK) {
-            std::cerr << "SQL Error: " << errMsg << std::endl;
-            sqlite3_free(errMsg);
-        }
+    void stopSession(int id, long long end, long long now) const {
+        std::lock_guard<std::mutex> lock(mutex);
+        Statement current(db, "SELECT start_time FROM sessions WHERE id=? AND COALESCE(end_time,0)=0;");
+        current.bind(1, id);
+        if (!current.next()) throw RequestError(409, "该计时已结束或不存在，请刷新后重试");
+        if (end < current.number(0) || end > now)
+            throw RequestError(400, "结束时间必须在开始时间与服务器当前时间之间");
+        Statement update(db, "UPDATE sessions SET end_time=? WHERE id=? AND COALESCE(end_time,0)=0;");
+        update.bind(1, end); update.bind(2, id); update.next();
+    }
+    std::vector<WorkSession> getAllSessions() const {
+        std::lock_guard<std::mutex> lock(mutex);
+        Statement query(db, "SELECT id,start_time,COALESCE(end_time,0),type,note FROM sessions ORDER BY start_time DESC,id DESC;");
+        std::vector<WorkSession> result;
+        while (query.next()) result.push_back({static_cast<int>(query.number(0)), query.number(1), query.number(2), query.text(3), query.text(4)});
+        return result;
+    }
+    void deleteSession(int id) const {
+        std::lock_guard<std::mutex> lock(mutex);
+        Statement query(db, "SELECT COALESCE(end_time,0) FROM sessions WHERE id=?;"); query.bind(1,id);
+        if (!query.next()) throw RequestError(404, "记录不存在");
+        if (!query.number(0)) throw RequestError(409, "请先结束计时再删除记录");
+        Statement remove(db, "DELETE FROM sessions WHERE id=?;"); remove.bind(1,id); remove.next();
+    }
+    void addNoteToSession(int id, const std::string& note) const {
+        std::lock_guard<std::mutex> lock(mutex);
+        Statement update(db, "UPDATE sessions SET note=? WHERE id=?;");
+        update.bind(1,note); update.bind(2,id); update.next(); requireChanged();
+    }
+    TaskBoard getBoard() const {
+        std::lock_guard<std::mutex> lock(mutex);
+        TaskBoard board;
+        Statement tasks(db, "SELECT id,title,description,status,created_at,updated_at FROM tasks ORDER BY id DESC;");
+        while (tasks.next()) board.tasks.push_back({static_cast<int>(tasks.number(0)),tasks.text(1),tasks.text(2),tasks.text(3),tasks.number(4),tasks.number(5)});
+        Statement nodes(db, "SELECT id,task_id,title,description,status,created_at,updated_at FROM problem_nodes ORDER BY id;");
+        while (nodes.next()) board.nodes.push_back({static_cast<int>(nodes.number(0)),static_cast<int>(nodes.number(1)),nodes.text(2),nodes.text(3),nodes.text(4),nodes.number(5),nodes.number(6)});
+        Statement todos(db, "SELECT id,node_id,title,done FROM node_todos ORDER BY id;");
+        while (todos.next()) board.todos.push_back({static_cast<int>(todos.number(0)),static_cast<int>(todos.number(1)),todos.text(2),todos.number(3)!=0});
+        Statement progress(db, "SELECT p.id,t.node_id,p.todo_id,p.content,p.created_at FROM todo_progress p JOIN node_todos t ON t.id=p.todo_id ORDER BY p.id DESC;");
+        while (progress.next()) board.progress.push_back({static_cast<int>(progress.number(0)),static_cast<int>(progress.number(1)),static_cast<int>(progress.number(2)),progress.text(3),progress.number(4)});
+        return board;
+    }
+    int saveTask(int id, const std::string& title, const std::string& description, const std::string& status, long long now) const {
+        std::lock_guard<std::mutex> lock(mutex);
+        Statement query(db, id ? "UPDATE tasks SET title=?,description=?,status=?,updated_at=? WHERE id=?;" : "INSERT INTO tasks(title,description,status,updated_at,created_at) VALUES(?,?,?,?,?);");
+        query.bind(1,title); query.bind(2,description); query.bind(3,status); query.bind(4,now); query.bind(5,id ? id : now); query.next();
+        if (id) requireChanged();
+        return id ? id : static_cast<int>(sqlite3_last_insert_rowid(db));
+    }
+    int saveNode(int id, int taskId, const std::string& title, const std::string& description, const std::string& status, long long now) const {
+        std::lock_guard<std::mutex> lock(mutex);
+        if (!id) requireParent("SELECT 1 FROM tasks WHERE id=?;",taskId);
+        Statement query(db, id ? "UPDATE problem_nodes SET title=?,description=?,status=?,updated_at=? WHERE id=?;" : "INSERT INTO problem_nodes(title,description,status,updated_at,created_at,task_id) VALUES(?,?,?,?,?,?);");
+        query.bind(1,title); query.bind(2,description); query.bind(3,status); query.bind(4,now); query.bind(5,id ? id : now);
+        if (!id) query.bind(6,taskId);
+        query.next(); if (id) requireChanged();
+        return id ? id : static_cast<int>(sqlite3_last_insert_rowid(db));
+    }
+    int saveTodo(int id, int nodeId, const std::string& title, bool done) const {
+        std::lock_guard<std::mutex> lock(mutex);
+        if (!id) requireParent("SELECT 1 FROM problem_nodes WHERE id=?;",nodeId);
+        Statement query(db,id ? "UPDATE node_todos SET title=?,done=? WHERE id=?;" : "INSERT INTO node_todos(title,done,node_id) VALUES(?,?,?);");
+        query.bind(1,title); query.bind(2,done ? 1 : 0); query.bind(3,id ? id : nodeId); query.next();
+        if (id) requireChanged();
+        return id ? id : static_cast<int>(sqlite3_last_insert_rowid(db));
+    }
+    // Input: todo ID, validated text and server timestamp. Output: new log ID.
+    // Every new progress entry belongs to exactly one existing todo.
+    int addProgress(int todoId, const std::string& content, long long now) const {
+        std::lock_guard<std::mutex> lock(mutex);
+        requireParent("SELECT 1 FROM node_todos WHERE id=?;",todoId);
+        Statement insert(db,"INSERT INTO todo_progress(todo_id,content,created_at) VALUES(?,?,?);");
+        insert.bind(1,todoId); insert.bind(2,content); insert.bind(3,now); insert.next();
+        return static_cast<int>(sqlite3_last_insert_rowid(db));
+    }
+    void deleteBoardItem(const std::string& kind, int id) const {
+        std::lock_guard<std::mutex> lock(mutex);
+        // Only these hard-coded table names are accepted by callers.
+        const char* sql = kind == "tasks" ? "DELETE FROM tasks WHERE id=?;" :
+            kind == "nodes" ? "DELETE FROM problem_nodes WHERE id=?;" :
+            kind == "todos" ? "DELETE FROM node_todos WHERE id=?;" :
+            kind == "progress" ? "DELETE FROM todo_progress WHERE id=?;" : nullptr;
+        if (!sql) throw RequestError(404,"未知资源");
+        Statement remove(db,sql); remove.bind(1,id); remove.next(); requireChanged();
     }
 };
-
 #endif
