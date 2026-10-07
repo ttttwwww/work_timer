@@ -1,5 +1,7 @@
 # WorkTimer 架构文档
 
+> 任务面板和新版计时同步、结束确认接口见 [task-panel.md](./task-panel.md)。下文保留原始架构与流程概览。
+
 ## 系统架构
 
 ```mermaid

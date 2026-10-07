@@ -1,11 +1,13 @@
 <script setup>
 import { ref, computed } from 'vue'
+import { formatDuration } from '../utils/time'
 
 const props = defineProps({
-  dailyStats: Object // 接收父组件处理好的数据
+  dailyStats: Object,
+  saveNote: Function,
 })
 
-const emit = defineEmits(['delete', 'update-note'])
+const emit = defineEmits(['delete'])
 
 const drawerVisible = ref(false)
 const selectedDate = ref('')
@@ -42,45 +44,50 @@ const openNoteDialog = (log) => {
 }
 
 // 保存笔记
-const saveNote = () => {
-  if (editingLog.value) {
-    emit('update-note', editingLog.value.id, tempNote.value)
-    dialogVisible.value = false
+const savingNote = ref(false)
+const saveNote = async () => {
+  if (!editingLog.value || savingNote.value) return
+  savingNote.value = true
+  try {
+    if (await props.saveNote(editingLog.value.id, tempNote.value))
+      dialogVisible.value = false
+  } finally {
+    savingNote.value = false
   }
 }
 
 // --- 可视化核心算法 ---
 // 计算某个时间块在 24小时进度条中的位置和宽度
 const calculateBarStyle = (log) => {
-  const date = new Date(log.startTime)
-  const end = log.endTime || new Date();
-  const duration = (end-date) / 1000; // 持续时间，单位秒
-  // 算出这是当天的第几秒 (0 - 86400)
-  const startSeconds = date.getHours() * 3600 + date.getMinutes() * 60 + date.getSeconds()
-
-  // 计算百分比
-  const leftPercent = (startSeconds / 86400) * 100
-  const widthPercent = (duration / 86400) * 100
-
+  const start = log.displayStart
+  const midnight = new Date(
+    start.getFullYear(),
+    start.getMonth(),
+    start.getDate(),
+  ).getTime()
+  const next = new Date(
+    start.getFullYear(),
+    start.getMonth(),
+    start.getDate() + 1,
+  ).getTime()
   return {
-    left: `${leftPercent}%`,
-    width: `${widthPercent}%`,
-    // 颜色区分：正式(蓝色)，摸鱼(绿色)
-    backgroundColor: log.type === 'formal' ? '#409EFF' : '#67C23A'
+    left: `${(100 * (start.getTime() - midnight)) / (next - midnight)}%`,
+    width: `${(100 * (log.displayEnd - start)) / (next - midnight)}%`,
+    backgroundColor: log.type === 'formal' ? '#409EFF' : '#67C23A',
   }
 }
-
-// 辅助文字格式化
 const formatTimeRange = (log) => {
-  const s = new Date(log.startTime )
-  const e = new Date(log.endTime)
-  const pad = (n) => n.toString().padStart(2, '0');
-  const format = (d) => `${d.getHours()}:${pad(d.getMinutes())}`;
-  if (e) {
-    return `${format(s)} - ${format(e)}`;
-  } else {
-    return `${format(s)} - 进行中...`;
-  }
+  const format = (d) =>
+    d.toLocaleTimeString([], {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    })
+  const endLabel =
+    log.displayEnd.getDate() !== log.displayStart.getDate()
+      ? '24:00:00'
+      : format(log.displayEnd)
+  return `${format(log.displayStart)} - ${endLabel}${log.ongoing ? '（进行中）' : ''}`
 }
 </script>
 
@@ -90,9 +97,9 @@ const formatTimeRange = (log) => {
     <el-calendar>
       <template #date-cell="{ data }">
         <div
-            class="date-cell"
-            :class="{ 'has-work': dailyStats[data.day] }"
-            @click="handleDateClick(data)"
+          class="date-cell"
+          :class="{ 'has-work': dailyStats[data.day] }"
+          @click="handleDateClick(data)"
         >
           <p class="day-number">{{ data.day.split('-').slice(2).join('') }}</p>
           <div v-if="dailyStats[data.day]" class="work-tag">
@@ -103,19 +110,23 @@ const formatTimeRange = (log) => {
     </el-calendar>
   </el-card>
 
-  <el-drawer v-model="drawerVisible" :title="selectedDate + ' 时间分布'" size="40%">
-
+  <el-drawer
+    v-model="drawerVisible"
+    :title="selectedDate + ' 时间分布'"
+    size="min(620px, 100vw)"
+  >
     <div class="visual-container" v-if="currentLogs.length">
       <div class="time-ruler">
-        <span>00:00</span><span>06:00</span><span>12:00</span><span>18:00</span><span>24:00</span>
+        <span>00:00</span><span>06:00</span><span>12:00</span><span>18:00</span
+        ><span>24:00</span>
       </div>
 
       <div class="timeline-track">
         <el-tooltip
-            v-for="log in currentLogs"
-            :key="log.id"
-            :content="`${log.type === 'formal'?'💼':'🐟'} ${formatTimeRange(log)}`"
-            placement="top"
+          v-for="log in currentLogs"
+          :key="log.id"
+          :content="`${log.type === 'formal' ? '💼' : '🐟'} ${formatTimeRange(log)}`"
+          placement="top"
         >
           <div class="time-block" :style="calculateBarStyle(log)"></div>
         </el-tooltip>
@@ -124,17 +135,19 @@ const formatTimeRange = (log) => {
 
     <div class="list-container">
       <h3>📋 详细记录</h3>
+      <el-empty v-if="!currentLogs.length" description="这一天还没有计时记录" />
       <el-timeline>
         <el-timeline-item
-            v-for="log in currentLogs" :key="log.id"
-            :type="log.type === 'formal' ? 'primary' : 'success'"
-            :timestamp="formatTimeRange(log)"
+          v-for="log in currentLogs"
+          :key="log.id"
+          :type="log.type === 'formal' ? 'primary' : 'success'"
+          :timestamp="formatTimeRange(log)"
         >
           <div class="log-item">
             <div class="log-header">
               <span class="log-title">
                 {{ log.type === 'formal' ? '💼 正式工作' : '🐟 摸鱼学习' }}
-                ({{ (log.duration / 60).toFixed(0) }} 分钟)
+                ({{ formatDuration(log.duration) }})
               </span>
               <el-button
                 type="danger"
@@ -149,25 +162,26 @@ const formatTimeRange = (log) => {
               <div v-if="log.note" class="note-content">
                 {{ log.note }}
               </div>
-              <div v-else class="note-placeholder">
-                点击添加笔记...
-              </div>
+              <div v-else class="note-placeholder">点击添加笔记...</div>
             </div>
           </div>
         </el-timeline-item>
       </el-timeline>
     </div>
-
   </el-drawer>
 
   <!-- 笔记编辑对话框 -->
   <el-dialog
     v-model="dialogVisible"
     title="编辑笔记"
-    width="500px"
+    width="min(500px, 94vw)"
+    :close-on-click-modal="false"
+    :close-on-press-escape="!savingNote"
+    :show-close="!savingNote"
   >
     <el-input
       v-model="tempNote"
+      :disabled="savingNote"
       type="textarea"
       :rows="10"
       placeholder="请输入笔记内容..."
@@ -176,8 +190,12 @@ const formatTimeRange = (log) => {
     />
 
     <template #footer>
-      <el-button @click="dialogVisible = false">取消</el-button>
-      <el-button type="primary" @click="saveNote">确定</el-button>
+      <el-button :disabled="savingNote" @click="dialogVisible = false"
+        >取消</el-button
+      >
+      <el-button type="primary" :loading="savingNote" @click="saveNote"
+        >确定</el-button
+      >
     </template>
   </el-dialog>
 </template>
@@ -214,13 +232,27 @@ const formatTimeRange = (log) => {
 }
 .time-block:hover {
   opacity: 0.8;
-  box-shadow: 0 0 5px rgba(0,0,0,0.2);
+  box-shadow: 0 0 5px rgba(0, 0, 0, 0.2);
 }
 
 /* 复用之前的日历样式 */
-.date-cell { height: 100%; display: flex; flex-direction: column; align-items: center; cursor: pointer; }
-.date-cell.has-work { background-color: #f0f9eb; }
-.work-tag { background-color: #67c23a; color: white; border-radius: 4px; font-size: 12px; padding: 2px 6px; }
+.date-cell {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  cursor: pointer;
+}
+.date-cell.has-work {
+  background-color: #f0f9eb;
+}
+.work-tag {
+  background-color: #67c23a;
+  color: white;
+  border-radius: 4px;
+  font-size: 12px;
+  padding: 2px 6px;
+}
 
 /* 详细记录样式 */
 .list-container {
@@ -263,7 +295,7 @@ const formatTimeRange = (log) => {
   font-size: 13px;
   line-height: 1.5;
   word-break: break-word;
-  white-space: pre-wrap;  /* 保留换行和空格 */
+  white-space: pre-wrap; /* 保留换行和空格 */
 }
 
 .note-placeholder {
