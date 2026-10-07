@@ -5,6 +5,7 @@
 #include <ctime>
 #include <filesystem>
 #include <mutex>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -22,16 +23,19 @@ struct Task {
     int id{};
     std::string title, description, status;
     long long created_at{}, updated_at{};
+    std::string note_location;
 };
 struct ProblemNode {
     int id{}, task_id{};
     std::string title, description, status;
     long long created_at{}, updated_at{};
+    std::string note_location;
 };
 struct Todo {
     int id{}, node_id{};
     std::string title;
     bool done{};
+    std::string note_location;
 };
 struct ProgressEntry {
     int id{}, node_id{}, todo_id{};
@@ -66,6 +70,12 @@ class Database {
         }
         void bind(int i, const std::string& value) {
             if (sqlite3_bind_text(stmt, i, value.data(), static_cast<int>(value.size()), SQLITE_TRANSIENT) != SQLITE_OK)
+                throw std::runtime_error(sqlite3_errmsg(db));
+        }
+        // Input: optional text. Output: bound text or SQL NULL for omitted fields.
+        void bindOptionalText(int i, const std::optional<std::string>& value) {
+            if (value) bind(i, *value);
+            else if (sqlite3_bind_null(stmt, i) != SQLITE_OK)
                 throw std::runtime_error(sqlite3_errmsg(db));
         }
         bool next() {
@@ -133,6 +143,28 @@ class Database {
             throw;
         }
     }
+    // Input: schema v1 database. Output: schema v2 with empty note locations.
+    // Keep all existing records and run the three column additions atomically.
+    void migrateNoteLocations() const {
+        execute("BEGIN IMMEDIATE;");
+        try {
+            long long version = 0;
+            {
+                Statement query(db, "PRAGMA user_version;");
+                if (query.next()) version = query.number(0);
+            }
+            if (version < 2) {
+                execute("ALTER TABLE tasks ADD COLUMN note_location TEXT NOT NULL DEFAULT '';"
+                        "ALTER TABLE problem_nodes ADD COLUMN note_location TEXT NOT NULL DEFAULT '';"
+                        "ALTER TABLE node_todos ADD COLUMN note_location TEXT NOT NULL DEFAULT '';"
+                        "PRAGMA user_version = 2;");
+            }
+            execute("COMMIT;");
+        } catch (...) {
+            sqlite3_exec(db, "ROLLBACK;", nullptr, nullptr, nullptr);
+            throw;
+        }
+    }
 public:
     explicit Database(const std::string& path) {
         if (path != ":memory:") {
@@ -163,6 +195,7 @@ public:
                 "CREATE INDEX IF NOT EXISTS todos_node ON node_todos(node_id);"
                 "CREATE INDEX IF NOT EXISTS progress_node ON node_progress(node_id);");
             migrateProgressToTodos();
+            migrateNoteLocations();
         } catch (...) { sqlite3_close(db); db = nullptr; throw; }
     }
     ~Database() { sqlite3_close(db); }
@@ -208,37 +241,43 @@ public:
     TaskBoard getBoard() const {
         std::lock_guard<std::mutex> lock(mutex);
         TaskBoard board;
-        Statement tasks(db, "SELECT id,title,description,status,created_at,updated_at FROM tasks ORDER BY id DESC;");
-        while (tasks.next()) board.tasks.push_back({static_cast<int>(tasks.number(0)),tasks.text(1),tasks.text(2),tasks.text(3),tasks.number(4),tasks.number(5)});
-        Statement nodes(db, "SELECT id,task_id,title,description,status,created_at,updated_at FROM problem_nodes ORDER BY id;");
-        while (nodes.next()) board.nodes.push_back({static_cast<int>(nodes.number(0)),static_cast<int>(nodes.number(1)),nodes.text(2),nodes.text(3),nodes.text(4),nodes.number(5),nodes.number(6)});
-        Statement todos(db, "SELECT id,node_id,title,done FROM node_todos ORDER BY id;");
-        while (todos.next()) board.todos.push_back({static_cast<int>(todos.number(0)),static_cast<int>(todos.number(1)),todos.text(2),todos.number(3)!=0});
+        Statement tasks(db, "SELECT id,title,description,status,created_at,updated_at,note_location FROM tasks ORDER BY id DESC;");
+        while (tasks.next()) board.tasks.push_back({static_cast<int>(tasks.number(0)),tasks.text(1),tasks.text(2),tasks.text(3),tasks.number(4),tasks.number(5),tasks.text(6)});
+        Statement nodes(db, "SELECT id,task_id,title,description,status,created_at,updated_at,note_location FROM problem_nodes ORDER BY id;");
+        while (nodes.next()) board.nodes.push_back({static_cast<int>(nodes.number(0)),static_cast<int>(nodes.number(1)),nodes.text(2),nodes.text(3),nodes.text(4),nodes.number(5),nodes.number(6),nodes.text(7)});
+        Statement todos(db, "SELECT id,node_id,title,done,note_location FROM node_todos ORDER BY id;");
+        while (todos.next()) board.todos.push_back({static_cast<int>(todos.number(0)),static_cast<int>(todos.number(1)),todos.text(2),todos.number(3)!=0,todos.text(4)});
         Statement progress(db, "SELECT p.id,t.node_id,p.todo_id,p.content,p.created_at FROM todo_progress p JOIN node_todos t ON t.id=p.todo_id ORDER BY p.id DESC;");
         while (progress.next()) board.progress.push_back({static_cast<int>(progress.number(0)),static_cast<int>(progress.number(1)),static_cast<int>(progress.number(2)),progress.text(3),progress.number(4)});
         return board;
     }
-    int saveTask(int id, const std::string& title, const std::string& description, const std::string& status, long long now) const {
+    // Input: task fields; omitted location preserves the saved value on update.
+    // Output: created/updated task ID. Empty location explicitly clears it.
+    int saveTask(int id, const std::string& title, const std::string& description, const std::string& status, long long now, const std::optional<std::string>& location = std::nullopt) const {
         std::lock_guard<std::mutex> lock(mutex);
-        Statement query(db, id ? "UPDATE tasks SET title=?,description=?,status=?,updated_at=? WHERE id=?;" : "INSERT INTO tasks(title,description,status,updated_at,created_at) VALUES(?,?,?,?,?);");
-        query.bind(1,title); query.bind(2,description); query.bind(3,status); query.bind(4,now); query.bind(5,id ? id : now); query.next();
+        Statement query(db, id ? "UPDATE tasks SET title=?,description=?,status=?,updated_at=?,note_location=COALESCE(?,note_location) WHERE id=?;" : "INSERT INTO tasks(title,description,status,updated_at,note_location,created_at) VALUES(?,?,?,?,COALESCE(?,''),?);");
+        query.bind(1,title); query.bind(2,description); query.bind(3,status); query.bind(4,now); query.bindOptionalText(5,location); query.bind(6,id ? id : now); query.next();
         if (id) requireChanged();
         return id ? id : static_cast<int>(sqlite3_last_insert_rowid(db));
     }
-    int saveNode(int id, int taskId, const std::string& title, const std::string& description, const std::string& status, long long now) const {
+    // Input: node fields and optional location. Output: saved node ID.
+    // Updates retain parent ownership and retain location when omitted.
+    int saveNode(int id, int taskId, const std::string& title, const std::string& description, const std::string& status, long long now, const std::optional<std::string>& location = std::nullopt) const {
         std::lock_guard<std::mutex> lock(mutex);
         if (!id) requireParent("SELECT 1 FROM tasks WHERE id=?;",taskId);
-        Statement query(db, id ? "UPDATE problem_nodes SET title=?,description=?,status=?,updated_at=? WHERE id=?;" : "INSERT INTO problem_nodes(title,description,status,updated_at,created_at,task_id) VALUES(?,?,?,?,?,?);");
-        query.bind(1,title); query.bind(2,description); query.bind(3,status); query.bind(4,now); query.bind(5,id ? id : now);
-        if (!id) query.bind(6,taskId);
+        Statement query(db, id ? "UPDATE problem_nodes SET title=?,description=?,status=?,updated_at=?,note_location=COALESCE(?,note_location) WHERE id=?;" : "INSERT INTO problem_nodes(title,description,status,updated_at,note_location,created_at,task_id) VALUES(?,?,?,?,COALESCE(?,''),?,?);");
+        query.bind(1,title); query.bind(2,description); query.bind(3,status); query.bind(4,now); query.bindOptionalText(5,location); query.bind(6,id ? id : now);
+        if (!id) query.bind(7,taskId);
         query.next(); if (id) requireChanged();
         return id ? id : static_cast<int>(sqlite3_last_insert_rowid(db));
     }
-    int saveTodo(int id, int nodeId, const std::string& title, bool done) const {
+    // Input: todo fields and optional location. Output: saved todo ID.
+    // Checkbox-only clients may omit location without erasing it.
+    int saveTodo(int id, int nodeId, const std::string& title, bool done, const std::optional<std::string>& location = std::nullopt) const {
         std::lock_guard<std::mutex> lock(mutex);
         if (!id) requireParent("SELECT 1 FROM problem_nodes WHERE id=?;",nodeId);
-        Statement query(db,id ? "UPDATE node_todos SET title=?,done=? WHERE id=?;" : "INSERT INTO node_todos(title,done,node_id) VALUES(?,?,?);");
-        query.bind(1,title); query.bind(2,done ? 1 : 0); query.bind(3,id ? id : nodeId); query.next();
+        Statement query(db,id ? "UPDATE node_todos SET title=?,done=?,note_location=COALESCE(?,note_location) WHERE id=?;" : "INSERT INTO node_todos(title,done,note_location,node_id) VALUES(?,?,COALESCE(?,''),?);");
+        query.bind(1,title); query.bind(2,done ? 1 : 0); query.bindOptionalText(3,location); query.bind(4,id ? id : nodeId); query.next();
         if (id) requireChanged();
         return id ? id : static_cast<int>(sqlite3_last_insert_rowid(db));
     }

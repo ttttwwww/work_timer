@@ -1,6 +1,8 @@
 <script setup>
 import { ref, computed } from 'vue'
 import { formatDuration } from '../utils/time'
+import ExpandableText from './ExpandableText.vue'
+import PlainTextInput from './PlainTextInput.vue'
 
 const props = defineProps({
   dailyStats: Object,
@@ -158,11 +160,15 @@ const formatTimeRange = (log) => {
               </el-button>
             </div>
 
-            <div class="log-note-preview" @click="openNoteDialog(log)">
-              <div v-if="log.note" class="note-content">
-                {{ log.note }}
-              </div>
-              <div v-else class="note-placeholder">点击添加笔记...</div>
+            <div class="log-note-preview">
+              <ExpandableText
+                v-if="log.note"
+                :text="log.note"
+                label="计时笔记"
+              />
+              <el-button text type="primary" @click="openNoteDialog(log)">
+                {{ log.note ? '编辑笔记' : '添加笔记' }}
+              </el-button>
             </div>
           </div>
         </el-timeline-item>
@@ -174,19 +180,18 @@ const formatTimeRange = (log) => {
   <el-dialog
     v-model="dialogVisible"
     title="编辑笔记"
-    width="min(500px, 94vw)"
+    width="min(860px, 94vw)"
+    top="5vh"
     :close-on-click-modal="false"
     :close-on-press-escape="!savingNote"
     :show-close="!savingNote"
   >
-    <el-input
+    <PlainTextInput
       v-model="tempNote"
       :disabled="savingNote"
-      type="textarea"
-      :rows="10"
+      :min-rows="8"
+      label="计时笔记"
       placeholder="请输入笔记内容..."
-      maxlength="500"
-      show-word-limit
     />
 
     <template #footer>
@@ -227,7 +232,6 @@ const formatTimeRange = (log) => {
   position: absolute;
   height: 100%;
   top: 0;
-  cursor: pointer;
   transition: opacity 0.2s;
 }
 .time-block:hover {
@@ -288,19 +292,5 @@ const formatTimeRange = (log) => {
 .log-note-preview:hover {
   border-color: #409eff;
   background-color: #f5f7fa;
-}
-
-.note-content {
-  color: #303133;
-  font-size: 13px;
-  line-height: 1.5;
-  word-break: break-word;
-  white-space: pre-wrap; /* 保留换行和空格 */
-}
-
-.note-placeholder {
-  color: #c0c4cc;
-  font-size: 13px;
-  font-style: italic;
 }
 </style>

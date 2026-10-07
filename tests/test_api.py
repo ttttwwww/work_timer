@@ -61,6 +61,29 @@ class ApiTests(unittest.TestCase):
             self.assertEqual(response.status,status,(path,payload))
             return json.loads(payload)
 
+    def reset_legacy_board(self, version):
+        """Input: old schema version 0/1. Output: empty pre-location task tables.
+        Called only with this test's temporary server stopped; sessions survive.
+        """
+        with sqlite3.connect(self.root/'test.db') as db:
+            db.executescript('''
+                DROP TABLE todo_progress;
+                DROP TABLE node_progress;
+                DROP TABLE node_todos;
+                DROP TABLE problem_nodes;
+                DROP TABLE tasks;
+                CREATE TABLE tasks(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,description TEXT NOT NULL DEFAULT '',status TEXT NOT NULL DEFAULT 'todo' CHECK(status IN ('todo','doing','done')),created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL);
+                CREATE TABLE problem_nodes(id INTEGER PRIMARY KEY AUTOINCREMENT,task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,title TEXT NOT NULL,description TEXT NOT NULL DEFAULT '',status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','doing','resolved')),created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL);
+                CREATE TABLE node_todos(id INTEGER PRIMARY KEY AUTOINCREMENT,node_id INTEGER NOT NULL REFERENCES problem_nodes(id) ON DELETE CASCADE,title TEXT NOT NULL,done INTEGER NOT NULL DEFAULT 0 CHECK(done IN (0,1)));
+                CREATE TABLE node_progress(id INTEGER PRIMARY KEY AUTOINCREMENT,node_id INTEGER NOT NULL REFERENCES problem_nodes(id) ON DELETE CASCADE,content TEXT NOT NULL,created_at INTEGER NOT NULL);
+            ''')
+            if version == 1:
+                db.executescript('''
+                    CREATE TABLE todo_progress(id INTEGER PRIMARY KEY AUTOINCREMENT,todo_id INTEGER NOT NULL REFERENCES node_todos(id) ON DELETE CASCADE,content TEXT NOT NULL,created_at INTEGER NOT NULL);
+                    CREATE INDEX progress_todo ON todo_progress(todo_id);
+                ''')
+            db.execute(f'PRAGMA user_version={version}')
+
     def test_timer_validation_and_trim(self):
         state=self.request('/api/state')
         self.assertAlmostEqual(state['server_time'],time.time(),delta=2)
@@ -160,10 +183,9 @@ class ApiTests(unittest.TestCase):
 
     def test_legacy_progress_migration_is_lossless_and_runs_once(self):
         self.stop()
+        self.reset_legacy_board(0)
         legacy=[(7,10,"旧记录 O'Brien\n下一步",1700000000),(9,10,'第二次排查',1700000100),(12,20,'另一节点',1700000200)]
         with sqlite3.connect(self.root/'test.db') as db:
-            db.execute('DROP TABLE todo_progress')
-            db.execute('PRAGMA user_version=0')
             db.execute("INSERT INTO tasks VALUES(1,'原任务','','doing',100,100)")
             db.executemany("INSERT INTO problem_nodes VALUES(?,1,'原节点','','open',100,100)",[(10,),(20,),(30,)])
             db.execute("INSERT INTO node_todos VALUES(5,10,'原有已完成待办',1)")
@@ -185,5 +207,53 @@ class ApiTests(unittest.TestCase):
         self.assertEqual([t['id'] for t in self.request('/api/tasks')['todos']],[5])
         new=self.request('/api/todos/5/progress','POST',{'content':'升级后的新日志'},201)
         self.assertGreater(new['id'],12)
+
+    def test_note_locations_roundtrip_and_older_client_updates(self):
+        location="个人电脑 D:\\Notes\\O'Brien 实验.md\n共享盘：项目A/第3册，第25页"
+        task_body={'title':'任务','description':'简介','status':'doing','note_location':location}
+        task=self.request('/api/tasks','POST',task_body,201)['id']
+        node_body={'title':'问题','description':'说明','status':'open','note_location':location}
+        node=self.request(f'/api/tasks/{task}/nodes','POST',node_body,201)['id']
+        todo_body={'title':'行动','note_location':location}
+        todo=self.request(f'/api/nodes/{node}/todos','POST',todo_body,201)['id']
+        for group in ('tasks','nodes','todos'):
+            self.assertEqual(self.request('/api/tasks')[group][0]['note_location'],location)
+        # Older clients and checkbox/status shortcuts omit the new field.
+        del task_body['note_location']; del node_body['note_location']
+        self.request(f'/api/tasks/{task}','PUT',task_body)
+        self.request(f'/api/nodes/{node}','PUT',node_body)
+        self.request(f'/api/todos/{todo}','PUT',{'title':'行动','done':True})
+        self.stop(); self.start()
+        for group in ('tasks','nodes','todos'):
+            self.assertEqual(self.request('/api/tasks')[group][0]['note_location'],location)
+        self.request(f'/api/todos/{todo}','PUT',{'title':'行动','done':True,'note_location':''})
+        self.assertEqual(self.request('/api/tasks')['todos'][0]['note_location'],'')
+        self.assertEqual(self.request('/api/tasks')['nodes'][0]['note_location'],location)
+        for route,body in ((f'/api/tasks/{task}',task_body),(f'/api/nodes/{node}',node_body),(f'/api/todos/{todo}',{'title':'行动','done':False})):
+            for invalid in (None,123,{},'中'*1334):
+                self.request(route,'PUT',{**body,'note_location':invalid},400)
+        default=self.request(f'/api/nodes/{node}/todos','POST',{'title':'无位置'},201)['id']
+        self.assertEqual(next(t for t in self.request('/api/tasks')['todos'] if t['id']==default)['note_location'],'')
+
+    def test_v1_migration_preserves_board_and_is_idempotent(self):
+        self.stop(); self.reset_legacy_board(1)
+        with sqlite3.connect(self.root/'test.db') as db:
+            db.execute("INSERT INTO tasks VALUES(1,'旧任务','旧说明','doing',100,120)")
+            db.execute("INSERT INTO problem_nodes VALUES(2,1,'旧节点','','resolved',110,130)")
+            db.execute("INSERT INTO node_todos VALUES(3,2,'已完成行动',1)")
+            db.execute("INSERT INTO todo_progress VALUES(4,3,'仍需保留的日志',140)")
+        self.start()
+        board=self.request('/api/tasks')
+        for group in ('tasks','nodes','todos'):
+            self.assertEqual(board[group][0]['note_location'],'')
+        self.assertTrue(board['todos'][0]['done'])
+        self.assertEqual(board['progress'][0]['content'],'仍需保留的日志')
+        self.assertEqual(board['progress'][0]['created_at'],140)
+        self.assertEqual(board['tasks'][0]['updated_at'],120)
+        with sqlite3.connect(self.root/'test.db') as db:
+            self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0],2)
+        self.stop(); self.start()
+        self.assertEqual(self.request('/api/tasks'),board)
+        self.assertEqual(len(self.request('/api/history')),1)
 
 if __name__=='__main__': unittest.main(verbosity=2)

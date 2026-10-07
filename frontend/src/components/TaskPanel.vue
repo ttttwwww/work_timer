@@ -3,6 +3,9 @@ import { ref, reactive, computed, onMounted, onUnmounted, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { api } from '../utils/api'
 import NodeDetail from './NodeDetail.vue'
+import ExpandableText from './ExpandableText.vue'
+import PlainTextInput from './PlainTextInput.vue'
+import NoteLocation from './NoteLocation.vue'
 
 const props = defineProps({ active: Boolean })
 const board = ref({ tasks: [], nodes: [], todos: [], progress: [] })
@@ -101,7 +104,12 @@ const editorVisible = ref(false)
 const editorKind = ref('task')
 const editorId = ref(null)
 const editorParent = ref(null)
-const form = ref({ title: '', description: '', status: 'todo' })
+const form = ref({
+  title: '',
+  description: '',
+  status: 'todo',
+  note_location: '',
+})
 function edit(kind, item) {
   editorKind.value = kind
   editorId.value = item?.id ?? null
@@ -112,6 +120,7 @@ function edit(kind, item) {
     description: item?.description ?? '',
     status: item?.status ?? (kind === 'task' ? 'todo' : 'open'),
     done: item?.done ?? false,
+    note_location: item?.note_location ?? '',
   }
   editorVisible.value = true
 }
@@ -143,6 +152,7 @@ async function saveEditor() {
     path = `/api/todos/${id}`
     body = { title, done: form.value.done }
   }
+  body.note_location = form.value.note_location
   const ok = await mutate(path, id ? 'PUT' : 'POST', body, (result) => {
     if (kind === 'task') {
       selectedTaskId.value = result.id
@@ -284,10 +294,18 @@ onUnmounted(() => {
             >
           </div>
         </div>
-        <p v-if="task.description" class="description">
-          {{ task.description }}
-        </p>
+        <ExpandableText
+          v-if="task.description"
+          :key="task.id"
+          :text="task.description"
+          label="任务说明"
+          class="description"
+        />
         <p v-else class="muted">可在编辑任务中补充目标和说明。</p>
+        <NoteLocation
+          :key="`task-location-${task.id}`"
+          :location="task.note_location"
+        />
         <div class="section-heading">
           <h3>
             问题节点
@@ -344,7 +362,8 @@ onUnmounted(() => {
     <el-dialog
       v-model="editorVisible"
       :title="editorTitle"
-      width="min(560px,94vw)"
+      width="min(860px,94vw)"
+      top="5vh"
       :close-on-click-modal="false"
       :show-close="!busy"
       :close-on-press-escape="!busy"
@@ -360,14 +379,11 @@ onUnmounted(() => {
         /></el-form-item>
         <template v-if="editorKind !== 'todo'">
           <el-form-item label="说明"
-            ><el-input
+            ><PlainTextInput
               v-model="form.description"
               :disabled="busy"
-              type="textarea"
-              :rows="5"
-              maxlength="5000"
-              show-word-limit
-              aria-label="说明"
+              :min-rows="7"
+              label="说明"
               placeholder="描述目标、问题现象或需要补充的背景"
           /></el-form-item>
           <el-form-item label="状态"
@@ -381,6 +397,21 @@ onUnmounted(() => {
                 :value="value" /></el-select
           ></el-form-item>
         </template>
+        <el-form-item label="笔记位置（可选）">
+          <el-input
+            v-model="form.note_location"
+            type="textarea"
+            :autosize="{ minRows: 2, maxRows: 5 }"
+            :disabled="busy"
+            maxlength="1000"
+            show-word-limit
+            aria-label="笔记位置"
+            placeholder="例如：个人电脑 D:\Notes\实验记录.md，或共享盘目录、笔记本页码"
+          />
+          <p class="location-hint">
+            填写便于自己或他人定位的文字说明。仅记录位置，不读取或上传笔记。
+          </p>
+        </el-form-item>
       </el-form>
       <template #footer
         ><el-button :disabled="busy" @click="editorVisible = false"
@@ -398,6 +429,12 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+.location-hint {
+  margin: 6px 0 0;
+  color: #909399;
+  font-size: 12px;
+  line-height: 1.6;
+}
 h2,
 h3,
 p {
