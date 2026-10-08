@@ -1,6 +1,8 @@
 <script setup>
 import { computed } from 'vue'
 import TodoItem from './TodoItem.vue'
+import ExpandableText from './ExpandableText.vue'
+import NoteLocation from './NoteLocation.vue'
 const props = defineProps({
   node: Object,
   draft: Object,
@@ -90,7 +92,13 @@ const changeStatus = (status) =>
         >
       </div>
     </div>
-    <p v-if="node.description" class="description">{{ node.description }}</p>
+    <ExpandableText
+      v-if="node.description"
+      :text="node.description"
+      label="节点说明"
+      class="description"
+    />
+    <NoteLocation :location="node.note_location" />
     <div class="section-heading">
       <h4>待办清单</h4>
       <span class="muted">{{ completed }}/{{ todos.length }} 已完成</span>
@@ -165,10 +173,7 @@ h4 {
   width: 112px;
 }
 .description {
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  font-size: 14px;
-  line-height: 1.7;
+  margin-top: 14px;
 }
 .muted {
   color: #909399;

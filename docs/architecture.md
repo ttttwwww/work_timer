@@ -34,6 +34,8 @@ flowchart TB
 - **SQLite** 作为库链接到后端，数据存入文件，不是额外运行的数据库服务器。
 - 一个服务可以被多个浏览器访问；没有用户隔离。计时记录与任务数据共用数据库文件，但两类业务没有外键关联。
 
+个人设备上的笔记文件在系统之外；数据库只保存用户填写的 `note_location` 文字，浏览器与服务均不访问这些文件。
+
 界面每秒更新计时显示，并定期通过 HTTP 拉取状态；当前没有 WebSocket 推送。关掉页面不会自动结束数据库中的计时记录。
 
 ## 2. 模块：沿调用关系定位代码
@@ -70,6 +72,9 @@ flowchart TB
 | [TaskPanel.vue](../frontend/src/components/TaskPanel.vue) | 持有面板快照、任务/节点选择、编辑表单与草稿；统一协调 `load` / `mutate` 和轮询 |
 | [NodeDetail.vue](../frontend/src/components/NodeDetail.vue) | 节点状态、待办完成比例、新建待办；按 `todo_id` 为各待办分组日志 |
 | [TodoItem.vue](../frontend/src/components/TodoItem.vue) | 待办勾选、日志折叠与输入；调用传入的 `mutate` 保存日志 |
+| [ExpandableText.vue](../frontend/src/components/ExpandableText.vue) | 测量纯文本预览高度，控制全文展开；不解析富文本 |
+| [PlainTextInput.vue](../frontend/src/components/PlainTextInput.vue) | 自动增高输入框与放大编辑窗口，共享父级草稿，不自行提交 |
+| [NoteLocation.vue](../frontend/src/components/NoteLocation.vue) / [utils/clipboard.js](../frontend/src/utils/clipboard.js) | 展示笔记位置、复制和手动选择回退；不读取或打开文件 |
 | [utils/api.js](../frontend/src/utils/api.js) | 发送请求、解析 JSON、把非成功响应转成异常；不保存业务状态 |
 | [utils/time.js](../frontend/src/utils/time.js) | 服务器时钟估计、时长格式化、本地日期转换、跨日拆分统计 |
 | [WebServer.cpp](../backend/src/WebServer.cpp) | 注册路由、校验 JSON、调用数据库、生成响应；提供静态资源 |

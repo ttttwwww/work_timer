@@ -12,7 +12,7 @@
 - 时间戳为 Unix **秒**，不是 JavaScript 毫秒；创建时间由服务器填写。
 - JSON 中的 ID 必须是正整数，不能用字符串、小数或布尔值代替；当前 ID 范围为 1 到 2147483647。路径中的 `:id` 表示实际整数，不包含冒号。各路径对非正数的处理不完全统一：PUT 显式返回 400，创建子资源/删除的查询通常返回 404，不应依赖非法路径值进行业务判断。
 - 显式传入的 `end_time` 必须为 1 到 9007199254740991 的 JSON 整数，之后还要通过会话时间范围校验。
-- PUT 是提交指定可编辑字段的完整集合，不是 PATCH；未提供必需字段会失败。不能通过更新接口改变对象的父级归属。
+- PUT 是提交指定可编辑字段的完整集合，不是 PATCH；未提供必需字段会失败；新增的可选 `note_location` 省略时保留原值。不能通过更新接口改变对象的父级归属。
 - 业务响应为 JSON，并设置 `Cache-Control: no-store`。未匹配路由或 HTTP 框架产生的错误不保证使用下述 JSON 格式。
 
 ### 文本和状态
@@ -21,6 +21,7 @@
 | --- | --- | --- |
 | 任务/节点/待办 `title` | 最多 800 个 UTF-8 字节 | 必须是字符串，不能全为空格、Tab 或换行 |
 | 任务/节点 `description` | 最多 20000 个 UTF-8 字节 | 必须提供字符串，允许 `""` |
+| 任务/节点/待办 `note_location` | 最多 4000 个 UTF-8 字节 | 可省略；提供时必须为字符串，不能为 `null`；`""` 清空 |
 | 日志 `content` | 最多 20000 个 UTF-8 字节 | 必须提供非空白字符串 |
 | 计时 `note` | 最多 20000 个 UTF-8 字节 | 必须提供字符串，允许 `""` 清空 |
 | 计时 `type` | `formal` / `informal` | 正式工作 / 摸鱼学习 |
@@ -28,7 +29,7 @@
 | 节点 `status` | `open` / `doing` / `resolved` | 待解决 / 处理中 / 已解决 |
 | 待办 `done` | JSON `true` / `false` | 不接受数字 0/1 或字符串 `"false"` |
 
-前端标题输入上限为 200，任务/节点说明和日志输入上限为 5000；它们是输入控件限制，不等于后端 UTF-8 字节限制。API 不自动去除文本首尾空白，界面会对标题和新日志先执行 `trim()`。数据库的默认值也不代表 API 可以省略字段。
+前端标题输入上限为 200，任务/节点说明、日志和计时笔记输入上限为 5000，笔记位置为 1000；它们是输入控件限制，不等于后端 UTF-8 字节限制。API 不自动去除文本首尾空白，界面会对标题和新日志先执行 `trim()`。数据库的默认值也不代表 API 可以省略字段。
 
 ### 响应与错误
 
@@ -68,7 +69,7 @@
 | `PUT /api/nodes/:id` | `saveNode(id, 0, ...)` | 更新 `problem_nodes`，保留 `task_id` |
 | `DELETE /api/nodes/:id` | `deleteBoardItem("nodes", id)` | 删除节点及其待办、日志 |
 | `POST /api/nodes/:id/todos` | `saveTodo(0, nodeId, ...)` | 检查节点存在，插入未完成的 `node_todos` |
-| `PUT /api/todos/:id` | `saveTodo(id, 0, ...)` | 更新 `node_todos` 标题与完成标记 |
+| `PUT /api/todos/:id` | `saveTodo(id, 0, ...)` | 更新 `node_todos` 标题、完成标记及可选笔记位置 |
 | `DELETE /api/todos/:id` | `deleteBoardItem("todos", id)` | 删除待办及其 `todo_progress` |
 | `POST /api/todos/:id/progress` | `addProgress()` | 检查待办存在，插入 `todo_progress` |
 | `DELETE /api/progress/:id` | `deleteBoardItem("progress", id)` | 删除指定 `todo_progress` |
@@ -159,13 +160,13 @@ DELETE 路由由 `/api/<string>/<int>` 统一接收，但只允许 `tasks`、`no
 ```json
 {
   "tasks": [
-    {"id":1,"title":"复现实验","description":"复现基线结果","status":"doing","created_at":1700000000,"updated_at":1700000300}
+    {"id":1,"title":"复现实验","description":"复现基线结果","status":"doing","created_at":1700000000,"updated_at":1700000300,"note_location":"个人电脑：D:\\Notes\\实验记录.md"}
   ],
   "nodes": [
-    {"id":2,"task_id":1,"title":"准确率偏低","description":"核对数据预处理","status":"open","created_at":1700000100,"updated_at":1700000100}
+    {"id":2,"task_id":1,"title":"准确率偏低","description":"核对数据预处理","status":"open","created_at":1700000100,"updated_at":1700000100,"note_location":"实验记录.md 第3节"}
   ],
   "todos": [
-    {"id":3,"node_id":2,"title":"检查输入归一化","done":false}
+    {"id":3,"node_id":2,"title":"检查输入归一化","done":false,"note_location":""}
   ],
   "progress": [
     {"id":4,"node_id":2,"todo_id":3,"content":"已核对训练集，下一步检查测试集","created_at":1700000200}
@@ -185,6 +186,10 @@ DELETE 路由由 `/api/<string>/<int>` 统一接收，但只允许 `tasks`、`no
 列表称为“快照”表示一次 API 返回的面板集合，不承诺隔离其他进程直接写库的跨表事务，详见[数据库一致性](database.md#5-索引删除与一致性)。
 
 ## 5. 创建和更新任务、节点、待办
+
+以下所有创建/更新接口均支持可选字符串 `note_location`。POST 省略时保存 `""`；PUT 省略时保留现值，显式传 `""` 清空。`null`、非字符串或超过 4000 个 UTF-8 字节返回 400。该字段只保存原文，不读取服务器或个人设备上的文件，也不提供上传、下载或打开文件的接口。
+
+例如在下列任务请求的三个必填字段之外，可增加 `"note_location":"个人电脑：D:\\Notes\\实验记录.md"`；JSON 中的反斜杠需转义。GET 返回的任务、节点和待办均包含此字段，即使为空。
 
 ### POST /api/tasks 与 PUT /api/tasks/:id
 

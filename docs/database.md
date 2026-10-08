@@ -70,6 +70,7 @@ erDiagram
 | `id` | INTEGER，主键自增 | 任务 ID |
 | `title` | TEXT，NOT NULL | 标题 |
 | `description` | TEXT，NOT NULL，默认 `''` | 说明 |
+| `note_location` | TEXT，NOT NULL，默认 `''` | 笔记位置原文，不引用或读取文件 |
 | `status` | TEXT，NOT NULL，默认 `todo`；CHECK 枚举 | `todo`、`doing`、`done` |
 | `created_at` | INTEGER，NOT NULL | 创建时间 |
 | `updated_at` | INTEGER，NOT NULL | 最近一次任务自身更新的时间 |
@@ -82,6 +83,7 @@ erDiagram
 | `task_id` | INTEGER，NOT NULL，FK → `tasks.id` | 所属任务，删除任务时级联删除 |
 | `title` | TEXT，NOT NULL | 问题标题 |
 | `description` | TEXT，NOT NULL，默认 `''` | 问题说明 |
+| `note_location` | TEXT，NOT NULL，默认 `''` | 笔记位置原文 |
 | `status` | TEXT，NOT NULL，默认 `open`；CHECK 枚举 | `open`、`doing`、`resolved` |
 | `created_at` | INTEGER，NOT NULL | 创建时间 |
 | `updated_at` | INTEGER，NOT NULL | 最近一次节点自身更新的时间 |
@@ -96,6 +98,7 @@ erDiagram
 | `node_id` | INTEGER，NOT NULL，FK → `problem_nodes.id` | 所属节点，删除节点时级联删除 |
 | `title` | TEXT，NOT NULL | 待办标题 |
 | `done` | INTEGER，NOT NULL，默认 0；CHECK 为 0 或 1 | 未完成/完成；API 转为 JSON 布尔值 |
+| `note_location` | TEXT，NOT NULL，默认 `''` | 笔记位置原文 |
 
 当前待办表没有创建/更新时间列。完成比例由前端根据 `done` 计算，不单独存入数据库。
 
@@ -153,6 +156,12 @@ Crow 可以多线程处理请求，单个 `Database` 对象用互斥锁串行执
 4. 将 `user_version` 设为 1 并提交；失败则回滚本次迁移事务。
 
 空数据库会得到相同的新表，但不会生成历史待办。已有待办不会被改写；重启不会重复复制日志，删除已迁移日志后也不会重新出现。此前创建表和补 `note` 列的初始化步骤不在这个迁移事务内。
+
+随后 `migrateNoteLocations()` 在独立的 `BEGIN IMMEDIATE` 事务中检查版本；版本小于 2 时，为 `tasks`、`problem_nodes`、`node_todos` 各新增 `note_location TEXT NOT NULL DEFAULT ''`，将 `user_version` 设为 **2** 后提交。失败回滚本次事务，重启可重试。现有记录得到空字符串，标题、说明、完成状态、日志和时间均保持原样。
+
+新库和版本 0 的旧库依次执行两次迁移；版本 1 只执行新增字段迁移；版本 2 启动时跳过两次迁移。字段由启动流程管理，无需手动改库。
+
+`note_location` 保存位置文字，没有文件存储或路径解析。API 创建时省略该字段会写入空字符串；更新时省略会保留原值，显式 `""` 才清空。SQL 使用绑定参数与 `COALESCE(?,note_location)` 区分这两种情况，旧客户端和快捷勾选不会意外清空位置。
 
 旧 `node_progress` 表保留，但当前 API 不再读写它。它仍有节点外键，删除对应节点/任务时旧表记录也会级联删除，因此它不是完整的数据库备份或可靠的版本回退机制。不要手工重置 `user_version` 来重复运行迁移。
 

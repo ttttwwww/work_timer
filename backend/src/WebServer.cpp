@@ -32,6 +32,12 @@ std::string textField(const Input& data, const char* key, size_t limit, bool req
         throw RequestError(400,std::string("文本为空或过长: ")+key);
     return value;
 }
+// Input: request object. Output: optional plain-text location, never opened.
+// Missing preserves older clients' updates; an empty string clears the value.
+std::optional<std::string> noteLocationField(const Input& data) {
+    if (!data.has("note_location")) return std::nullopt;
+    return textField(data,"note_location",4000);
+}
 long long integer(const Input& data, const char* key) {
     if (!data.has(key) || data[key].t() != crow::json::type::Number || data[key].nt() == crow::json::num_type::Floating_point)
         throw RequestError(400,std::string("无效整数字段: ")+key);
@@ -102,9 +108,9 @@ void WebServer::setupRoutes() {
         return api([&] {
             const auto board = db.getBoard();
             std::vector<Json> tasks, nodes, todos, progress;
-            for (const auto& t : board.tasks) tasks.push_back(Json{{"id",t.id},{"title",t.title},{"description",t.description},{"status",t.status},{"created_at",static_cast<std::int64_t>(t.created_at)},{"updated_at",static_cast<std::int64_t>(t.updated_at)}});
-            for (const auto& n : board.nodes) nodes.push_back(Json{{"id",n.id},{"task_id",n.task_id},{"title",n.title},{"description",n.description},{"status",n.status},{"created_at",static_cast<std::int64_t>(n.created_at)},{"updated_at",static_cast<std::int64_t>(n.updated_at)}});
-            for (const auto& t : board.todos) todos.push_back(Json{{"id",t.id},{"node_id",t.node_id},{"title",t.title},{"done",t.done}});
+            for (const auto& t : board.tasks) tasks.push_back(Json{{"id",t.id},{"title",t.title},{"description",t.description},{"status",t.status},{"note_location",t.note_location},{"created_at",static_cast<std::int64_t>(t.created_at)},{"updated_at",static_cast<std::int64_t>(t.updated_at)}});
+            for (const auto& n : board.nodes) nodes.push_back(Json{{"id",n.id},{"task_id",n.task_id},{"title",n.title},{"description",n.description},{"status",n.status},{"note_location",n.note_location},{"created_at",static_cast<std::int64_t>(n.created_at)},{"updated_at",static_cast<std::int64_t>(n.updated_at)}});
+            for (const auto& t : board.todos) todos.push_back(Json{{"id",t.id},{"node_id",t.node_id},{"title",t.title},{"done",t.done},{"note_location",t.note_location}});
             for (const auto& p : board.progress) progress.push_back(Json{{"id",p.id},{"node_id",p.node_id},{"todo_id",p.todo_id},{"content",p.content},{"created_at",static_cast<std::int64_t>(p.created_at)}});
             Json result;
             result["tasks"]=std::move(tasks); result["nodes"]=std::move(nodes);
@@ -115,38 +121,41 @@ void WebServer::setupRoutes() {
     CROW_ROUTE(app,"/api/tasks").methods(crow::HTTPMethod::POST)([this](const crow::request& req) {
         return api([&] {
             const auto data = parse(req);
-            return jsonResponse(Json{{"id",db.saveTask(0,textField(data,"title",800,true),textField(data,"description",20000),statusField(data,true),nowSeconds())}},201);
+            return jsonResponse(Json{{"id",db.saveTask(0,textField(data,"title",800,true),textField(data,"description",20000),statusField(data,true),nowSeconds(),noteLocationField(data))}},201);
         });
     });
     CROW_ROUTE(app,"/api/tasks/<int>").methods(crow::HTTPMethod::PUT)([this](const crow::request& req,int id) {
         return api([&] {
             if (id <= 0) throw RequestError(400,"无效记录 ID");
             const auto data = parse(req);
-            return jsonResponse(Json{{"id",db.saveTask(id,textField(data,"title",800,true),textField(data,"description",20000),statusField(data,true),nowSeconds())}});
+            return jsonResponse(Json{{"id",db.saveTask(id,textField(data,"title",800,true),textField(data,"description",20000),statusField(data,true),nowSeconds(),noteLocationField(data))}});
         });
     });
     CROW_ROUTE(app,"/api/tasks/<int>/nodes").methods(crow::HTTPMethod::POST)([this](const crow::request& req,int taskId) {
         return api([&] {
             const auto data = parse(req);
-            return jsonResponse(Json{{"id",db.saveNode(0,taskId,textField(data,"title",800,true),textField(data,"description",20000),statusField(data,false),nowSeconds())}},201);
+            return jsonResponse(Json{{"id",db.saveNode(0,taskId,textField(data,"title",800,true),textField(data,"description",20000),statusField(data,false),nowSeconds(),noteLocationField(data))}},201);
         });
     });
     CROW_ROUTE(app,"/api/nodes/<int>").methods(crow::HTTPMethod::PUT)([this](const crow::request& req,int id) {
         return api([&] {
             if (id <= 0) throw RequestError(400,"无效记录 ID");
             const auto data = parse(req);
-            return jsonResponse(Json{{"id",db.saveNode(id,0,textField(data,"title",800,true),textField(data,"description",20000),statusField(data,false),nowSeconds())}});
+            return jsonResponse(Json{{"id",db.saveNode(id,0,textField(data,"title",800,true),textField(data,"description",20000),statusField(data,false),nowSeconds(),noteLocationField(data))}});
         });
     });
     CROW_ROUTE(app,"/api/nodes/<int>/todos").methods(crow::HTTPMethod::POST)([this](const crow::request& req,int nodeId) {
-        return api([&] { return jsonResponse(Json{{"id",db.saveTodo(0,nodeId,textField(parse(req),"title",800,true),false)}},201); });
+        return api([&] {
+            const auto data = parse(req);
+            return jsonResponse(Json{{"id",db.saveTodo(0,nodeId,textField(data,"title",800,true),false,noteLocationField(data))}},201);
+        });
     });
     CROW_ROUTE(app,"/api/todos/<int>").methods(crow::HTTPMethod::PUT)([this](const crow::request& req,int id) {
         return api([&] {
             if (id <= 0) throw RequestError(400,"无效记录 ID");
             const auto data = parse(req);
             if (!data.has("done") || (data["done"].t() != crow::json::type::True && data["done"].t() != crow::json::type::False)) throw RequestError(400,"无效待办状态");
-            return jsonResponse(Json{{"id",db.saveTodo(id,0,textField(data,"title",800,true),data["done"].b())}});
+            return jsonResponse(Json{{"id",db.saveTodo(id,0,textField(data,"title",800,true),data["done"].b(),noteLocationField(data))}});
         });
     });
     CROW_ROUTE(app,"/api/todos/<int>/progress").methods(crow::HTTPMethod::POST)([this](const crow::request& req,int todoId) {

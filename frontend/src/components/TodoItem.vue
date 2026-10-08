@@ -1,5 +1,8 @@
 <script setup>
 import { computed } from 'vue'
+import ExpandableText from './ExpandableText.vue'
+import PlainTextInput from './PlainTextInput.vue'
+import NoteLocation from './NoteLocation.vue'
 
 const props = defineProps({
   todo: Object,
@@ -81,6 +84,7 @@ async function addProgress() {
         >
       </div>
     </div>
+    <NoteLocation :location="todo.note_location" />
     <section
       v-show="expanded"
       :id="`todo-progress-${todo.id}`"
@@ -88,14 +92,10 @@ async function addProgress() {
       :aria-label="`${todo.title}的进度`"
     >
       <form @submit.prevent="addProgress">
-        <el-input
+        <PlainTextInput
           v-model="progressDraft"
-          type="textarea"
-          :rows="3"
           :disabled="busy"
-          maxlength="5000"
-          show-word-limit
-          :aria-label="`为${todo.title}记录进度`"
+          :label="`为${todo.title}记录进度`"
           placeholder="记录这项待办的尝试、结果和下一步…"
         />
         <div class="save-progress">
@@ -119,12 +119,13 @@ async function addProgress() {
           placement="top"
         >
           <div class="entry">
-            <p>{{ entry.content }}</p>
+            <ExpandableText :text="entry.content" label="进度记录" />
             <el-button
               text
               size="small"
               type="danger"
               :disabled="busy"
+              class="delete-progress"
               @click="emit('delete-progress', entry.id)"
               >删除记录</el-button
             >
@@ -198,14 +199,7 @@ async function addProgress() {
   border-radius: 6px;
   background: #f5f7fa;
 }
-.entry p {
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  margin: 0;
-  font-size: 14px;
-  line-height: 1.7;
-}
-.entry .el-button {
+.entry .delete-progress {
   display: block;
   margin-left: auto;
 }
