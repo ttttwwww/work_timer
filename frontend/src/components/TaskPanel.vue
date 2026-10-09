@@ -46,7 +46,8 @@ const progress = computed(() =>
 const drafts = reactive({})
 const nodeDraft = computed(() => {
   const id = selectedNodeId.value
-  if (!drafts[id]) drafts[id] = { todo: '', progress: {}, expanded: {} }
+  if (!drafts[id])
+    drafts[id] = { todo: '', progress: {}, progressEdits: {}, expanded: {} }
   // Read through the reactive map so the first node's nested drafts update UI.
   return drafts[id]
 })
@@ -152,7 +153,7 @@ async function saveEditor() {
     path = `/api/todos/${id}`
     body = { title, done: form.value.done }
   }
-  body.note_location = form.value.note_location
+  if (kind !== 'node') body.note_location = form.value.note_location
   const ok = await mutate(path, id ? 'PUT' : 'POST', body, (result) => {
     if (kind === 'task') {
       selectedTaskId.value = result.id
@@ -397,7 +398,7 @@ onUnmounted(() => {
                 :value="value" /></el-select
           ></el-form-item>
         </template>
-        <el-form-item label="笔记位置（可选）">
+        <el-form-item v-if="editorKind !== 'node'" label="笔记位置（可选）">
           <el-input
             v-model="form.note_location"
             type="textarea"

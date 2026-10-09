@@ -191,6 +191,8 @@ anchor = monotonicNow()
 
 ## 6. 笔记位置与纯文本编辑
 
-任务、节点、待办的编辑表单持有 `note_location` 草稿，保存时通过现有 POST/PUT 路由提交。后端用 `noteLocationField()` 区分“省略”与“空字符串”，再传给 `saveTask()` / `saveNode()` / `saveTodo()`：新对象省略时为空，已有对象省略时不改原值。待办勾选和节点状态快捷更新不发送此字段，因此保留原位置。查询快照返回文字，由 `NoteLocation` 展示与复制；复制不发送 API 请求。
+任务、待办的编辑表单持有 `note_location` 草稿，保存时通过现有 POST/PUT 路由提交。后端用 `noteLocationField()` 区分“省略”与“空字符串”，再传给数据库方法：新对象省略时为空，已有对象省略时不改原值。节点界面已移除该项，节点保存及状态快捷更新均不发送此字段，旧值在数据库中保留以兼容旧客户端。查询快照中的任务、待办位置由 `NoteLocation` 展示与复制；复制不发送 API 请求。
 
 `PlainTextInput` 的普通输入框和放大窗口通过 `v-model` 连接同一份父级草稿。完成放大编辑只关闭窗口，实际提交仍由任务表单、计时笔记表单或待办日志的保存按钮负责。`ExpandableText` 只控制显示高度，完整字符串始终保留，展开不会额外请求数据。
+
+已有日志由 `ProgressEntry` 管理查看/编辑交互。`TaskPanel.drafts` 下的 `progressEdits` 按日志 ID 保存草稿，经 `NodeDetail` 和 `TodoItem` 传入；`undefined` 表示查看状态，空字符串表示正在编辑但尚未填写，不能混淆。保存通过同一个 `mutate` 发送 `PUT /api/progress/:id`，后端 `updateProgress()` 只修改正文。写入失败保留草稿；成功退出编辑并刷新快照；取消仅清除对应草稿，不发送请求。父级保存草稿使节点切换和轮询不会覆盖正在编辑的文字。

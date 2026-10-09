@@ -1,12 +1,13 @@
 <script setup>
 import { computed } from 'vue'
-import ExpandableText from './ExpandableText.vue'
+import ProgressEntry from './ProgressEntry.vue'
 import PlainTextInput from './PlainTextInput.vue'
 import NoteLocation from './NoteLocation.vue'
 
 const props = defineProps({
   todo: Object,
   entries: Array,
+  editDrafts: { type: Object, required: true },
   draft: { type: String, default: '' },
   expanded: Boolean,
   busy: Boolean,
@@ -118,18 +119,13 @@ async function addProgress() {
           :timestamp="new Date(entry.created_at * 1000).toLocaleString()"
           placement="top"
         >
-          <div class="entry">
-            <ExpandableText :text="entry.content" label="进度记录" />
-            <el-button
-              text
-              size="small"
-              type="danger"
-              :disabled="busy"
-              class="delete-progress"
-              @click="emit('delete-progress', entry.id)"
-              >删除记录</el-button
-            >
-          </div>
+          <ProgressEntry
+            :entry="entry"
+            v-model:draft="editDrafts[entry.id]"
+            :busy="busy"
+            :mutate="mutate"
+            @delete="(id) => emit('delete-progress', id)"
+          />
         </el-timeline-item>
       </el-timeline>
     </section>
@@ -193,15 +189,6 @@ async function addProgress() {
 .progress-list {
   padding-left: 4px;
   margin: 18px 0 0;
-}
-.entry {
-  padding: 10px 12px;
-  border-radius: 6px;
-  background: #f5f7fa;
-}
-.entry .delete-progress {
-  display: block;
-  margin-left: auto;
 }
 @media (max-width: 600px) {
   .todo-heading {
