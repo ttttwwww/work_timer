@@ -84,6 +84,31 @@ class ApiTests(unittest.TestCase):
                 ''')
             db.execute(f'PRAGMA user_version={version}')
 
+    def test_edit_progress_preserves_identity_and_rejects_invalid_updates(self):
+        """Input: saved logs and edits. Output: only the selected body changes and persists."""
+        task = self.request('/api/tasks', 'POST', {'title':'任务','description':'','status':'todo'}, 201)['id']
+        node = self.request(f'/api/tasks/{task}/nodes', 'POST', {'title':'节点','description':'','status':'open'}, 201)['id']
+        todo = self.request(f'/api/nodes/{node}/todos', 'POST', {'title':'待办'}, 201)['id']
+        first = self.request(f'/api/todos/{todo}/progress', 'POST', {'content':'旧正文'}, 201)['id']
+        self.request(f'/api/todos/{todo}/progress', 'POST', {'content':'另一条记录'}, 201)
+        before = self.request('/api/tasks')
+        content = '  修正后的记录\n中文、引号 " 与路径 D:\\Notes\\test.md\n<script>plain text</script>  '
+        self.request(f'/api/progress/{first}', 'PUT', {'content':content,'todo_id':999,'created_at':0})
+        expected = dict(before)
+        expected['progress'] = [dict(entry, content=content) if entry['id'] == first else entry for entry in before['progress']]
+        self.assertEqual(self.request('/api/tasks'), expected)
+        # An identical update must also succeed; blank/invalid edits never erase text.
+        self.request(f'/api/progress/{first}', 'PUT', {'content':content})
+        for body in ({}, {'content':None}, {'content':42}, {'content':''}, {'content':' \n\t'}, {'content':'中'*6667}):
+            self.request(f'/api/progress/{first}', 'PUT', body, 400)
+        self.request('/api/progress/0', 'PUT', {'content':'正文'}, 400)
+        self.request('/api/progress/999999', 'PUT', {'content':'正文'}, 404)
+        self.stop()
+        self.start()
+        self.assertEqual(self.request('/api/tasks'), expected)
+        self.request(f'/api/progress/{first}', 'DELETE')
+        self.request(f'/api/progress/{first}', 'PUT', {'content':'已删除的记录'}, 404)
+
     def test_timer_validation_and_trim(self):
         state=self.request('/api/state')
         self.assertAlmostEqual(state['server_time'],time.time(),delta=2)

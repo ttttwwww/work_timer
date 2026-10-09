@@ -161,6 +161,13 @@ void WebServer::setupRoutes() {
     CROW_ROUTE(app,"/api/todos/<int>/progress").methods(crow::HTTPMethod::POST)([this](const crow::request& req,int todoId) {
         return api([&] { return jsonResponse(Json{{"id",db.addProgress(todoId,textField(parse(req),"content",20000,true),nowSeconds())}},201); });
     });
+    CROW_ROUTE(app,"/api/progress/<int>").methods(crow::HTTPMethod::PUT)([this](const crow::request& req,int id) {
+        return api([&] {
+            if (id <= 0) throw RequestError(400,"无效记录 ID");
+            db.updateProgress(id,textField(parse(req),"content",20000,true));
+            return jsonResponse(Json{{"ok",true}});
+        });
+    });
     // Old pages must refresh rather than create another unassigned node log.
     CROW_ROUTE(app,"/api/nodes/<int>/progress").methods(crow::HTTPMethod::POST)([](int) {
         return jsonResponse(Json{{"error","进度记录已移入待办，请刷新页面后在具体待办内记录"}},410);

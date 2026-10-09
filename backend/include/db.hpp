@@ -290,6 +290,13 @@ public:
         insert.bind(1,todoId); insert.bind(2,content); insert.bind(3,now); insert.next();
         return static_cast<int>(sqlite3_last_insert_rowid(db));
     }
+    // Input: existing progress ID and validated text. Output: updated body only;
+    // preserve its original timestamp, owning todo, and position in the timeline.
+    void updateProgress(int id, const std::string& content) const {
+        std::lock_guard<std::mutex> lock(mutex);
+        Statement update(db,"UPDATE todo_progress SET content=? WHERE id=?;");
+        update.bind(1,content); update.bind(2,id); update.next(); requireChanged();
+    }
     void deleteBoardItem(const std::string& kind, int id) const {
         std::lock_guard<std::mutex> lock(mutex);
         // Only these hard-coded table names are accepted by callers.

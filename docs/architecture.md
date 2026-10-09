@@ -72,6 +72,7 @@ flowchart TB
 | [TaskPanel.vue](../frontend/src/components/TaskPanel.vue) | 持有面板快照、任务/节点选择、编辑表单与草稿；统一协调 `load` / `mutate` 和轮询 |
 | [NodeDetail.vue](../frontend/src/components/NodeDetail.vue) | 节点状态、待办完成比例、新建待办；按 `todo_id` 为各待办分组日志 |
 | [TodoItem.vue](../frontend/src/components/TodoItem.vue) | 待办勾选、日志折叠与输入；调用传入的 `mutate` 保存日志 |
+| [ProgressEntry.vue](../frontend/src/components/ProgressEntry.vue) | 单条日志的查看、编辑、保存与取消；通过父级草稿保留跨节点编辑状态 |
 | [ExpandableText.vue](../frontend/src/components/ExpandableText.vue) | 测量纯文本预览高度，控制全文展开；不解析富文本 |
 | [PlainTextInput.vue](../frontend/src/components/PlainTextInput.vue) | 自动增高输入框与放大编辑窗口，共享父级草稿，不自行提交 |
 | [NoteLocation.vue](../frontend/src/components/NoteLocation.vue) / [utils/clipboard.js](../frontend/src/utils/clipboard.js) | 展示笔记位置、复制和手动选择回退；不读取或打开文件 |

@@ -2,7 +2,6 @@
 import { computed } from 'vue'
 import TodoItem from './TodoItem.vue'
 import ExpandableText from './ExpandableText.vue'
-import NoteLocation from './NoteLocation.vue'
 const props = defineProps({
   node: Object,
   draft: Object,
@@ -98,7 +97,6 @@ const changeStatus = (status) =>
       label="节点说明"
       class="description"
     />
-    <NoteLocation :location="node.note_location" />
     <div class="section-heading">
       <h4>待办清单</h4>
       <span class="muted">{{ completed }}/{{ todos.length }} 已完成</span>
@@ -115,6 +113,7 @@ const changeStatus = (status) =>
         :key="item.id"
         :todo="item"
         :entries="progressByTodo[item.id] || []"
+        :edit-drafts="draft.progressEdits"
         v-model:draft="draft.progress[item.id]"
         v-model:expanded="draft.expanded[item.id]"
         :busy="busy"
