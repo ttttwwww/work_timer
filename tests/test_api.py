@@ -128,6 +128,41 @@ class ApiTests(unittest.TestCase):
         self.request('/api/stop','POST',{'id':second['id']})
         self.request('/api/delete','POST',{'id':item['id']})
 
+    def test_stop_with_corrected_start_is_atomic_and_persistent(self):
+        """Input: corrected intervals. Output: both times saved together; other fields survive."""
+        now = int(time.time())
+        original = now - 7200
+        # Backdated fixtures exercise delayed starts without sleeping in real time.
+        for start, end in ((original-3600, original-60), (original+600, now-60), (original, original)):
+            session_id = self.request('/api/start', 'POST', {'type':'formal'}, 201)['id']
+            self.request('/api/note', 'POST', {'id':session_id,'note':'保留已有笔记'})
+            self.stop()
+            with sqlite3.connect(self.root/'test.db') as db:
+                db.execute('UPDATE sessions SET start_time=? WHERE id=?', (original,session_id))
+            self.start()
+            before = self.request('/api/history')
+            invalid = [None, False, '123', 1.5, 0, -1, 9007199254740992, now+3600]
+            for value in invalid:
+                self.request('/api/stop', 'POST', {'id':session_id,'start_time':value,'end_time':now}, 400)
+            self.request('/api/stop', 'POST', {'id':session_id,'start_time':now,'end_time':now-1}, 400)
+            self.request('/api/stop', 'POST', {'id':session_id,'start_time':original-3600,'end_time':now+3600}, 400)
+            self.assertEqual(self.request('/api/history'), before)
+            self.request('/api/stop', 'POST', {'id':session_id,'start_time':start,'end_time':end})
+            expected = dict(next(s for s in before if s['id'] == session_id), start_time=start,end_time=end)
+            self.stop()
+            self.start()
+            saved = self.request('/api/history')
+            self.assertEqual(next(s for s in saved if s['id'] == session_id), expected)
+            self.assertEqual([s for s in saved if s['id'] != session_id], [s for s in before if s['id'] != session_id])
+        active_id = self.request('/api/start', 'POST', {'type':'informal'}, 201)['id']
+        before = self.request('/api/history')
+        self.request('/api/stop', 'POST', {'id':session_id,'start_time':original}, 409)
+        self.assertEqual(self.request('/api/history'), before)
+        self.request('/api/stop', 'POST', {'id':active_id,'start_time':now-300})
+        saved = next(s for s in self.request('/api/history') if s['id'] == active_id)
+        self.assertEqual(saved['start_time'], now-300)
+        self.assertGreaterEqual(saved['end_time'], now)
+
     def test_concurrent_start(self):
         def start():
             req=urllib.request.Request(f'http://127.0.0.1:{self.port}/api/start',data=b'{"type":"formal"}',headers={'Content-Type':'application/json'})

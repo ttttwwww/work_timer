@@ -209,15 +209,18 @@ public:
         if (!sqlite3_changes(db)) throw RequestError(409, "已有计时在进行中，请先结束");
         return static_cast<int>(sqlite3_last_insert_rowid(db));
     }
-    void stopSession(int id, long long end, long long now) const {
+    // Input: active session ID, end time, server time and optional corrected start.
+    // Output: save both times atomically; omission preserves the original start.
+    void stopSession(int id, long long end, long long now, std::optional<long long> correctedStart = std::nullopt) const {
         std::lock_guard<std::mutex> lock(mutex);
         Statement current(db, "SELECT start_time FROM sessions WHERE id=? AND COALESCE(end_time,0)=0;");
         current.bind(1, id);
         if (!current.next()) throw RequestError(409, "该计时已结束或不存在，请刷新后重试");
-        if (end < current.number(0) || end > now)
-            throw RequestError(400, "结束时间必须在开始时间与服务器当前时间之间");
-        Statement update(db, "UPDATE sessions SET end_time=? WHERE id=? AND COALESCE(end_time,0)=0;");
-        update.bind(1, end); update.bind(2, id); update.next();
+        const auto start = correctedStart.value_or(current.number(0));
+        if (start <= 0 || start > end || end > now)
+            throw RequestError(400, "开始时间必须有效且不晚于结束时间，结束时间不能晚于服务器当前时间");
+        Statement update(db, "UPDATE sessions SET start_time=?,end_time=? WHERE id=? AND COALESCE(end_time,0)=0;");
+        update.bind(1, start); update.bind(2, end); update.bind(3, id); update.next();
     }
     std::vector<WorkSession> getAllSessions() const {
         std::lock_guard<std::mutex> lock(mutex);

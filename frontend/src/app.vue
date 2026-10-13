@@ -78,42 +78,53 @@ const stopVisible = ref(false)
 const stoppingSession = ref(null)
 const stopLimit = ref(0)
 const stopInput = ref('')
+const editStart = ref(false)
+const startInput = ref('')
+// Input: checkbox and local datetime draft. Output: chosen or original start in ms.
+const stopStart = computed(() =>
+  editStart.value
+    ? new Date(startInput.value).getTime()
+    : stoppingSession.value?.startTime.getTime(),
+)
 const stopEnd = computed(() => new Date(stopInput.value).getTime())
 const stopValid = computed(
   () =>
     Number.isFinite(stopEnd.value) &&
+    Number.isFinite(stopStart.value) &&
+    stopStart.value > 0 &&
     stoppingSession.value &&
-    stopEnd.value >= stoppingSession.value.startTime.getTime() &&
+    stopEnd.value >= stopStart.value &&
     stopEnd.value <= stopLimit.value,
 )
 const keptSeconds = computed(() =>
+  stopValid.value ? (stopEnd.value - stopStart.value) / 1000 : 0,
+)
+// Input: chosen interval. Output: net seconds added/removed from the original timer.
+const adjustmentSeconds = computed(() =>
   stopValid.value
-    ? (stopEnd.value - stoppingSession.value.startTime.getTime()) / 1000
+    ? keptSeconds.value -
+      (stopLimit.value - stoppingSession.value.startTime.getTime()) / 1000
     : 0,
 )
-const trimmedSeconds = computed(() =>
-  stopValid.value ? (stopLimit.value - stopEnd.value) / 1000 : 0,
-)
+// Input: active session. Output: a fresh confirmation draft with a fixed end bound.
 function openStop() {
   if (!active.value) return
   stoppingSession.value = { ...active.value }
   stopLimit.value = Math.floor(clock.now() / 1000) * 1000
   stopInput.value = toLocalInput(stopLimit.value)
+  editStart.value = false
+  startInput.value = toLocalInput(stoppingSession.value.startTime.getTime())
   stopVisible.value = true
 }
+// Input: valid draft interval. Output: stop this session; retain draft on failure.
 async function confirmStop() {
   if (!stopValid.value) return
-  if (
-    await mutate(
-      '/api/stop',
-      {
-        id: stoppingSession.value.id,
-        end_time: Math.floor(stopEnd.value / 1000),
-      },
-      '记录已保存',
-    )
-  )
-    stopVisible.value = false
+  const body = {
+    id: stoppingSession.value.id,
+    end_time: Math.floor(stopEnd.value / 1000),
+  }
+  if (editStart.value) body.start_time = Math.floor(stopStart.value / 1000)
+  if (await mutate('/api/stop', body, '记录已保存')) stopVisible.value = false
 }
 async function handleDelete(id) {
   if (!rawWorkLogs.value.find((log) => log.id === id)?.endTime)
@@ -196,14 +207,40 @@ onUnmounted(() => {
       v-model="stopVisible"
       title="确认结束计时"
       width="min(500px, 94vw)"
+      top="5vh"
       :close-on-click-modal="false"
       :show-close="!busy"
       :close-on-press-escape="!busy"
     >
-      <p>如果忘记关闭计时，可以把结束时间提前，删去实际未工作的时间。</p>
-      <p v-if="stoppingSession">
-        开始时间：{{ stoppingSession.startTime.toLocaleString() }}
+      <p>
+        按实际工作情况调整结束时间；需要补记或修正开始时间时，可勾选下方选项。
       </p>
+      <p v-if="stoppingSession">
+        原开始时间：{{ stoppingSession.startTime.toLocaleString() }}
+      </p>
+      <el-checkbox v-model="editStart" :disabled="busy"
+        >修改开始时间</el-checkbox
+      >
+      <div v-if="editStart" class="start-time-editor">
+        <label for="start-time">实际开始时间（本地时区）</label>
+        <input
+          id="start-time"
+          class="stop-time"
+          type="datetime-local"
+          step="1"
+          v-model="startInput"
+          :max="toLocalInput(stopLimit)"
+          :disabled="busy"
+        />
+        <el-button
+          text
+          :disabled="busy"
+          @click="
+            startInput = toLocalInput(stoppingSession.startTime.getTime())
+          "
+          >恢复原开始时间</el-button
+        >
+      </div>
       <label for="stop-time">实际结束时间（本地时区）</label>
       <input
         id="stop-time"
@@ -211,9 +248,7 @@ onUnmounted(() => {
         type="datetime-local"
         step="1"
         v-model="stopInput"
-        :min="
-          stoppingSession && toLocalInput(stoppingSession.startTime.getTime())
-        "
+        :min="Number.isFinite(stopStart) ? toLocalInput(stopStart) : undefined"
         :max="toLocalInput(stopLimit)"
         :disabled="busy"
       />
@@ -224,12 +259,14 @@ onUnmounted(() => {
         >恢复为点击结束时的时间</el-button
       >
       <p v-if="stopValid">
-        保留 <strong>{{ formatDuration(keptSeconds) }}</strong> · 扣除
-        {{ formatDuration(trimmedSeconds) }}
+        本次时长 <strong>{{ formatDuration(keptSeconds) }}</strong
+        ><br />
+        相较原计时{{ adjustmentSeconds > 0 ? '增加' : '扣除' }}
+        {{ formatDuration(Math.abs(adjustmentSeconds)) }}
       </p>
       <el-alert
         v-else
-        title="请选择开始时间至点击结束时之间的时间"
+        title="请填写有效时间：开始时间不能晚于结束时间，结束时间不能晚于打开确认框时。"
         type="warning"
         :closable="false"
       />
@@ -297,6 +334,9 @@ h1 {
   margin: 10px 0;
   border: 1px solid #dcdfe6;
   border-radius: 6px;
+}
+.start-time-editor {
+  margin: 8px 0 16px;
 }
 @media (max-width: 600px) {
   .app-container {
