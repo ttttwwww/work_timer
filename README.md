@@ -7,7 +7,7 @@
 | 功能 | 使用方式 |
 | --- | --- |
 | 工作计时 | 选择“正式工作”或“摸鱼/学习”开始计时；同一服务同时保留一个进行中的计时 |
-| 结束时间确认 | 结束前确认实际结束时间，可提前结束并查看保留、扣除的时长 |
+| 起止时间确认 | 结束时调整实际结束时间，可勾选修改开始时间，查看最终时长与增减 |
 | 历史与笔记 | 按日历查看时长、时间分布和明细，为记录添加笔记；跨午夜的记录按天展示 |
 | 任务面板 | 创建任务，在任务下建立问题节点，再拆分为可勾选的待办 |
 | 待办内进度 | 展开具体待办，记录尝试、结果和下一步；支持编辑已有记录，完成后保留日志 |
@@ -50,6 +50,8 @@ node --version
 npm --version
 ```
 
+也可在项目根目录执行 `make check-deps`，检查 Node.js、npm、CMake 和 C++ 编译器是否可用。实际构建时会按前端/后端分别检查工具，缺失时显示中文原因和验证命令；工具已安装但无法运行时保留原始错误。SQLite3、Asio、CMake 最低版本和 C++17 支持仍由后端配置/编译进一步检查。
+
 旧版 CentOS 等系统的默认工具链可能不足，不能只安装 `sqlite-devel`、`asio-devel` 就认为依赖齐全。请同时检查编译器、CMake 和 Node.js 版本。
 
 ### 构建并运行
@@ -57,8 +59,7 @@ npm --version
 ```bash
 git clone https://github.com/ttttwwww/work_timer.git
 cd work_timer
-# 按锁文件安装前端依赖
-npm --prefix frontend ci
+# 自动按锁文件安装前端依赖并构建
 make release
 cd build-Release
 ./WorkTimer
@@ -66,7 +67,11 @@ cd build-Release
 
 打开 [http://localhost:8080](http://localhost:8080)。运行时保持终端中的服务进程开启。
 
+Web 服务固定使用 4 个线程，避免在多核服务器上按全部逻辑 CPU 创建线程。正常情况下按 `Ctrl+C` 退出服务。
+
 `make release` 构建 Vue 静态资源和 C++ 程序，再组装到 `build-Release/`。请从该目录运行程序，因为配置文件和静态资源使用相对路径。更多构建与运行原理见[系统架构](docs/architecture.md)。
+
+实际构建前端时会检查安装成功标记、本地 Vite 和依赖清单更新时间；不满足条件时按锁文件执行 `npm ci --include=dev`，安装成功后才写入标记，避免中断安装留下的 `node_modules` 被误判为完整依赖。安装 npm 依赖时默认开启 npm 进度显示，并输出下载请求及安装脚本日志。进度显示取决于 npm 版本和终端，不保证提供整体百分比；网络请求等待期间也可能暂时没有新日志。如需更详细的诊断信息，可执行 `make release NPM_INSTALL_FLAGS="--progress=true --loglevel=verbose --foreground-scripts"`。若安装被中断，可先执行 `npm --prefix frontend ci --include=dev --progress=true --loglevel=http --foreground-scripts` 完成依赖安装，再运行 `make release`。
 
 ## 配置与数据
 

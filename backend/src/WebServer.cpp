@@ -78,7 +78,8 @@ void WebServer::setupRoutes() {
             const auto data = parse(req);
             const auto now = nowSeconds();
             const auto end = data.has("end_time") ? integer(data,"end_time") : now;
-            db.stopSession(idField(data,"id"),end,now);
+            const auto start = data.has("start_time") ? std::optional<long long>(integer(data,"start_time")) : std::nullopt;
+            db.stopSession(idField(data,"id"),end,now,start);
             return jsonResponse(Json{{"ok",true}});
         });
     });
@@ -192,5 +193,6 @@ void WebServer::setupRoutes() {
 }
 void WebServer::run(int port,const std::string& bind_address) {
     if (port <= 0 || port > 65535) throw std::runtime_error("Invalid port number");
-    app.bindaddr(bind_address).port(static_cast<uint16_t>(port)).multithreaded().run();
+    // 限制服务线程数，避免在多核服务器上按全部逻辑 CPU 创建线程。
+    app.bindaddr(bind_address).port(static_cast<uint16_t>(port)).concurrency(4).run();
 }

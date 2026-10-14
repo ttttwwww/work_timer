@@ -28,16 +28,16 @@ sequenceDiagram
         U->>F: 取消或关闭
         Note over F,D: 不发送停止请求，原计时继续
     else 确认
-        U->>F: 确认实际结束时间
-        F->>W: POST /api/stop，含 id 和 end_time
-        W->>D: stopSession(id, end, now)
+        U->>F: 确认结束时间，可勾选修正开始时间
+        F->>W: POST /api/stop，含 id、end_time 和可选 start_time
+        W->>D: stopSession(id, end, now, correctedStart)
         D->>D: 校验活跃状态和时间范围
         alt 状态或时间不合法
             D-->>W: RequestError
             W-->>F: 400 或 409，含 error
             F->>F: 显示错误，保留确认框
         else 合法
-            D->>D: UPDATE 指定 sessions 记录
+            D->>D: 一条 UPDATE 保存指定会话的起止时间
             D-->>W: 成功
             W-->>F: 200，ok 为 true
             F->>F: 标记本次写入成功
@@ -69,14 +69,16 @@ const emit = defineEmits(['start', 'stop'])
 }
 ```
 
+勾选“修改开始时间”时，还会添加 `start_time: Math.floor(stopStart.value / 1000)`；不勾选则省略，以保留原开始时间。每次打开确认框都重置勾选项和时间草稿，取消不写入数据库。时长预览根据选中的起止时间计算，并与原开始至打开确认框时的时长比较，显示增加或扣除量。
+
 日期输入控件使用浏览器本地时间，JavaScript 内部是毫秒；除以 1000 后才是后端要求的 Unix 秒。界面校验负责及时提示，后端再独立校验，不能依赖前端保证请求正确。
 
 ### 从路由到 SQL
 
-`/api/stop` 解析正整数 ID 和可选 `end_time`；不传结束时间时取服务器当前秒。`stopSession()` 先查指定记录是否仍活跃，再检查 `start_time ≤ end_time ≤ now`，最后执行：
+`/api/stop` 解析正整数 ID 和可选 `start_time` / `end_time`；不传结束时间时取服务器当前秒，不传开始时间则保留数据库中的原值。`stopSession()` 先查指定记录是否仍活跃，再检查 `0 < start_time ≤ end_time ≤ now`，最后执行：
 
 ```sql
-UPDATE sessions SET end_time=?
+UPDATE sessions SET start_time=?,end_time=?
 WHERE id=? AND COALESCE(end_time,0)=0;
 ```
 

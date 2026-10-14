@@ -11,7 +11,7 @@
 - 当前接口无登录鉴权和用户字段，作用于这个服务的共享数据库。
 - 时间戳为 Unix **秒**，不是 JavaScript 毫秒；创建时间由服务器填写。
 - JSON 中的 ID 必须是正整数，不能用字符串、小数或布尔值代替；当前 ID 范围为 1 到 2147483647。路径中的 `:id` 表示实际整数，不包含冒号。各路径对非正数的处理不完全统一：PUT 显式返回 400，创建子资源/删除的查询通常返回 404，不应依赖非法路径值进行业务判断。
-- 显式传入的 `end_time` 必须为 1 到 9007199254740991 的 JSON 整数，之后还要通过会话时间范围校验。
+- 结束请求中显式传入的 `start_time`、`end_time` 必须为 1 到 9007199254740991 的 JSON 整数，之后还要通过会话时间范围校验。
 - PUT 是提交指定可编辑字段的完整集合，不是 PATCH；未提供必需字段会失败；新增的可选 `note_location` 省略时保留原值。不能通过更新接口改变对象的父级归属。
 - 业务响应为 JSON，并设置 `Cache-Control: no-store`。未匹配路由或 HTTP 框架产生的错误不保证使用下述 JSON 格式。
 
@@ -58,7 +58,7 @@
 | `GET /api/state` | `getAllSessions()` | 查询 `sessions`，路由附加 `server_time` |
 | `GET /api/history` | `getAllSessions()` | 查询 `sessions`，返回原有数组格式 |
 | `POST /api/start` | `startSession()` | 确认无活跃记录后插入 `sessions` |
-| `POST /api/stop` | `stopSession()` | 校验并更新指定 `sessions.end_time` |
+| `POST /api/stop` | `stopSession()` | 校验并一起保存指定会话的结束时间及可选修正后的开始时间 |
 | `POST /api/note` | `addNoteToSession()` | 更新指定 `sessions.note` |
 | `POST /api/delete` | `deleteSession()` | 删除已结束的 `sessions` 记录 |
 | `GET /api/tasks` | `getBoard()` | 查询 `tasks`、`problem_nodes`、`node_todos`、`todo_progress`，日志连接待办表 |
@@ -116,13 +116,19 @@ DELETE 路由由 `/api/<string>/<int>` 统一接收，但只允许 `tasks`、`no
 
 ### POST /api/stop
 
-请求，`id` 必需，`end_time` 可选：
+请求，`id` 必需，`start_time` 和 `end_time` 可选：
 
 ```json
 {"id":8,"end_time":1700003500}
 ```
 
-省略 `end_time` 时，使用服务器收到请求时的当前时间。指定时间必须满足 `start_time ≤ end_time ≤ now`，允许零秒会话；示例时间只有在对应会话和当前时间满足条件时才有效。
+省略 `end_time` 时，使用服务器收到请求时的当前时间。省略 `start_time` 时保留原开始时间，兼容原有客户端。需要修正开始时间时可提交：
+
+```json
+{"id":8,"start_time":1700000000,"end_time":1700003500}
+```
+
+修正后的开始时间可以早于或晚于原开始时间，最终必须满足 `0 < start_time ≤ end_time ≤ now`，允许零秒会话。示例时间只有在对应会话仍在进行中且当前时间满足条件时才有效。两个时间通过一条 UPDATE 一起保存；任何校验失败均不修改原记录，类型与笔记不变。当前不校验与其他历史会话的时间重叠。
 
 成功返回 **200**：
 
